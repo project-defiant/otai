@@ -90,6 +90,47 @@ class TestGetReleases:
         assert from_cache is False
         assert fetch.call_count == 2
 
+    def test_naive_now_does_not_break_freshness_check_against_aware_cache(
+        self, tmp_path
+    ):
+        # First call with an aware `now` (production default) writes an
+        # aware resolved_at into the cache.
+        fetch = Mock(return_value=SAMPLE_LISTING_XML)
+        aware_now = datetime(2026, 7, 8, tzinfo=timezone.utc)
+        releases.get_releases(tmp_path, fetch_xml=fetch, now=aware_now)
+
+        # A second call passing a naive `now` (allowed by the signature)
+        # must not raise TypeError when comparing against the aware cache.
+        naive_later = datetime(2026, 7, 8, 1, 0, 0)
+        result_releases, latest, from_cache = releases.get_releases(
+            tmp_path, fetch_xml=fetch, now=naive_later
+        )
+
+        assert result_releases == ["25.12", "26.03", "26.06"]
+        assert latest == "26.06"
+        assert from_cache is True
+        fetch.assert_called_once()
+
+    def test_aware_now_does_not_break_freshness_check_against_naive_cache(
+        self, tmp_path
+    ):
+        # First call with a naive `now` writes a naive resolved_at.
+        fetch = Mock(return_value=SAMPLE_LISTING_XML)
+        naive_now = datetime(2026, 7, 8)
+        releases.get_releases(tmp_path, fetch_xml=fetch, now=naive_now)
+
+        # A second call passing an aware `now` must not raise TypeError
+        # when comparing against the naive cache.
+        aware_later = datetime(2026, 7, 8, 1, 0, 0, tzinfo=timezone.utc)
+        result_releases, latest, from_cache = releases.get_releases(
+            tmp_path, fetch_xml=fetch, now=aware_later
+        )
+
+        assert result_releases == ["25.12", "26.03", "26.06"]
+        assert latest == "26.06"
+        assert from_cache is True
+        fetch.assert_called_once()
+
     def test_cache_file_persists_across_process_boundaries(self, tmp_path):
         fetch = Mock(return_value=SAMPLE_LISTING_XML)
         now = datetime(2026, 7, 8, tzinfo=timezone.utc)

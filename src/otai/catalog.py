@@ -4,8 +4,8 @@ release schemas have already been materialized locally.
 Each Open Targets release gets its own DuckDB schema namespace inside a
 single shared catalog file (see PRD §5/§6). This module only knows how to
 open that file and enumerate the schemas already present in it; building
-the schemas themselves (per release, from croissant.json) is out of scope
-for this vertical slice and lands in a later issue.
+the schemas themselves (per release, from croissant.json) lives in
+`schema_builder.py`.
 """
 
 from __future__ import annotations

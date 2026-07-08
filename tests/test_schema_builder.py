@@ -1,4 +1,5 @@
 import duckdb
+import pytest
 
 from otai import schema_builder
 from otai.croissant import DatasetInfo
@@ -57,6 +58,37 @@ def test_build_release_schema_creates_one_view_per_dataset(fixture_release_layou
             ).fetchall()
         }
         assert views == set(dataset_rows)
+    finally:
+        conn.close()
+
+
+def test_failed_view_creation_rolls_back_the_whole_schema(fixture_release_layout):
+    base_uri, release, dataset_rows = fixture_release_layout
+    datasets = _datasets_for(dataset_rows)
+    datasets.append(
+        DatasetInfo(
+            name="broken",
+            description="dataset whose glob matches nothing",
+            file_glob="no_such_dataset/*.parquet",
+        )
+    )
+    conn = duckdb.connect()
+    try:
+        with pytest.raises(duckdb.Error):
+            schema_builder.build_release_schema(
+                conn, release, datasets, base_uri=base_uri
+            )
+
+        schemas = {
+            row[0]
+            for row in conn.execute(
+                "SELECT schema_name FROM information_schema.schemata"
+            ).fetchall()
+        }
+        assert release not in schemas, (
+            "a mid-build failure must roll back CREATE SCHEMA too, otherwise "
+            "list_cached_schemas would mistake the partial schema for already-built"
+        )
     finally:
         conn.close()
 
