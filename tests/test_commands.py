@@ -333,3 +333,164 @@ class TestDescribeDataset:
         )
 
         assert not (tmp_path / "catalog.duckdb").exists()
+
+
+class TestRunSql:
+    NOW = datetime(2026, 7, 8, tzinfo=timezone.utc)
+
+    def _fetch_xml(self):
+        return Mock(return_value=SAMPLE_LISTING_XML)
+
+    def _fetch_croissant(self):
+        return Mock(return_value=json.dumps(CROISSANT_FIXTURE).encode())
+
+    def test_executes_against_latest_via_search_path(self, tmp_path, fixture_release_layout):
+        base_uri, release, _dataset_rows = fixture_release_layout
+
+        result = commands.run_sql(
+            tmp_path,
+            "SELECT id, approvedSymbol FROM target ORDER BY id",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is True
+        assert result["data"]["release"] == release == "26.06"
+        assert result["data"]["columns"] == ["id", "approvedSymbol"]
+        assert result["data"]["rows"] == [
+            ["ENSG00000141510", "TP53"],
+            ["ENSG00000157764", "BRAF"],
+        ]
+        assert result["data"]["truncated"] is False
+
+    def test_has_no_release_parameter(self):
+        # run-sql has no --release flag (PRD §7) - always latest.
+        import inspect
+
+        assert "release" not in inspect.signature(commands.run_sql).parameters
+
+    def test_builds_release_schema_lazily(self, tmp_path, fixture_release_layout):
+        base_uri, release, _dataset_rows = fixture_release_layout
+
+        commands.run_sql(
+            tmp_path,
+            "SELECT * FROM target",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        conn = catalog.connect_catalog(tmp_path)
+        try:
+            assert release in catalog.list_cached_schemas(conn)
+        finally:
+            conn.close()
+
+    def test_rejects_non_select_with_guardrail_violation(self, tmp_path, fixture_release_layout):
+        base_uri, _release, _dataset_rows = fixture_release_layout
+
+        result = commands.run_sql(
+            tmp_path,
+            "DROP TABLE target",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "guardrail_violation"
+
+    def test_rejects_mutation_nested_in_cte(self, tmp_path, fixture_release_layout):
+        base_uri, _release, _dataset_rows = fixture_release_layout
+
+        result = commands.run_sql(
+            tmp_path,
+            'WITH x AS (INSERT INTO target VALUES ("z", "Z", []) RETURNING *) SELECT * FROM x',
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "guardrail_violation"
+
+    def test_malformed_query_returns_sql_error(self, tmp_path, fixture_release_layout):
+        base_uri, _release, _dataset_rows = fixture_release_layout
+
+        result = commands.run_sql(
+            tmp_path,
+            "SELECT * FROM target WHERE (",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "sql_error"
+
+    def test_row_cap_truncates_large_result(self, tmp_path, fixture_release_layout):
+        base_uri, _release, _dataset_rows = fixture_release_layout
+
+        result = commands.run_sql(
+            tmp_path,
+            "SELECT * FROM range(2500) AS t(n)",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+            row_cap=1000,
+        )
+
+        assert result["ok"] is True
+        assert result["data"]["row_count"] == 1000
+        assert result["data"]["truncated"] is True
+
+    def test_slow_query_times_out(self, tmp_path, fixture_release_layout):
+        base_uri, _release, _dataset_rows = fixture_release_layout
+
+        result = commands.run_sql(
+            tmp_path,
+            "SELECT count(*) FROM range(100000000) a, range(100000) b",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+            timeout_seconds=0.2,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "timeout"
+
+    def test_returns_failure_when_latest_resolution_fails(self, tmp_path):
+        fetch_xml = Mock(side_effect=OSError("network unreachable"))
+
+        result = commands.run_sql(
+            tmp_path,
+            "SELECT 1",
+            fetch_xml=fetch_xml,
+            fetch_croissant=self._fetch_croissant(),
+            now=self.NOW,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "s3_error"
+
+    def test_returns_failure_on_croissant_fetch_error(self, tmp_path):
+        fetch_croissant = Mock(side_effect=OSError("network unreachable"))
+
+        result = commands.run_sql(
+            tmp_path,
+            "SELECT 1",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=fetch_croissant,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "croissant_error"

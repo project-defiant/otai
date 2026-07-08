@@ -145,6 +145,43 @@ def describe_dataset_cmd(
         typer.echo(json.dumps(result))
 
 
+@app.command("run-sql")
+def run_sql_cmd(
+    query: str = typer.Argument(..., help="Read-only SQL query to execute."),
+    format: str = typer.Option(
+        "json",
+        "--format",
+        callback=_validate_format,
+        help="Output format: json (default) or table.",
+    ),
+) -> None:
+    """Run a guarded, read-only SQL query against the `latest` release.
+
+    No `--release` flag (PRD §7): unqualified table names resolve against
+    `latest` via DuckDB's search_path.
+    """
+    cache_dir = config.get_cache_dir()
+    base_uri = config.get_base_uri()
+    # Same reasoning as the other commands above: look up both fetch
+    # functions fresh on every call so test patches are honored.
+    result = commands.run_sql(
+        cache_dir,
+        query,
+        fetch_xml=releases_mod.default_fetch_listing_xml,
+        fetch_croissant=croissant.default_fetch_croissant,
+        base_uri=base_uri,
+    )
+
+    if not result["ok"]:
+        _emit_error(result, format)
+    elif format == "table":
+        columns = result["data"]["columns"]
+        row_dicts = [dict(zip(columns, row)) for row in result["data"]["rows"]]
+        typer.echo(formatting.render_table(row_dicts))
+    else:
+        typer.echo(json.dumps(result))
+
+
 def main() -> None:
     app()
 
