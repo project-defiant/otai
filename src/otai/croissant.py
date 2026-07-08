@@ -80,12 +80,51 @@ def get_croissant(
 
 
 @dataclass(frozen=True)
+class FieldReference:
+    """A cross-dataset relationship: a field pointing at another dataset's field.
+
+    Croissant 1.0 expresses this on a field as `references.field.@id`, an
+    identifier of the form "<recordSetName>/<fieldName>" (e.g.
+    "target/id"), which we split into the referenced dataset and field name.
+    """
+
+    dataset: str
+    field: str
+
+
+@dataclass(frozen=True)
+class FieldInfo:
+    """A single `field` (or `subField`) entry of a croissant `recordSet`."""
+
+    name: str
+    description: str
+    data_type: str
+    references: FieldReference | None = None
+    sub_fields: tuple[FieldInfo, ...] = ()
+
+    def as_dict(self) -> dict[str, Any]:
+        """JSON-serializable representation used by `describe-dataset` output."""
+        return {
+            "name": self.name,
+            "dataType": self.data_type,
+            "description": self.description,
+            "references": (
+                {"dataset": self.references.dataset, "field": self.references.field}
+                if self.references is not None
+                else None
+            ),
+            "subFields": [sub.as_dict() for sub in self.sub_fields],
+        }
+
+
+@dataclass(frozen=True)
 class DatasetInfo:
     """A single dataset (croissant `recordSet`) relevant to `list-datasets`."""
 
     name: str
     description: str
     file_glob: str
+    fields: tuple[FieldInfo, ...] = ()
 
 
 def _distribution_index(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -134,6 +173,50 @@ def _resolve_file_glob(
     return ""
 
 
+def _parse_reference(field: dict[str, Any]) -> FieldReference | None:
+    """Parse a field's `references` property into a FieldReference, if present.
+
+    Croissant 1.0 shape: `references.field.@id` = "<recordSetName>/<fieldName>"
+    (e.g. an evidence dataset's `targetId` field referencing `target/id`).
+    """
+    references = field.get("references")
+    if not isinstance(references, dict):
+        return None
+    ref_field = references.get("field")
+    if not isinstance(ref_field, dict):
+        return None
+    ref_id = ref_field.get("@id")
+    if not ref_id or "/" not in ref_id:
+        return None
+    dataset_name, _, field_name = ref_id.rpartition("/")
+    if not dataset_name or not field_name:
+        return None
+    return FieldReference(dataset=dataset_name, field=field_name)
+
+
+def _parse_data_type(field: dict[str, Any]) -> str:
+    data_type = field.get("dataType", "")
+    if isinstance(data_type, list):
+        return data_type[0] if data_type else ""
+    return data_type or ""
+
+
+def _parse_field(field: dict[str, Any]) -> FieldInfo:
+    """Parse a single `field` (or `subField`) entry, recursing into subFields."""
+    sub_fields = tuple(
+        _parse_field(sub)
+        for sub in field.get("subField") or []
+        if isinstance(sub, dict)
+    )
+    return FieldInfo(
+        name=field.get("name") or field.get("@id") or "",
+        description=field.get("description", ""),
+        data_type=_parse_data_type(field),
+        references=_parse_reference(field),
+        sub_fields=sub_fields,
+    )
+
+
 def parse_datasets(data: dict[str, Any]) -> list[DatasetInfo]:
     """Parse the `recordSet` entries of a croissant descriptor into DatasetInfo rows."""
     distribution = _distribution_index(data)
@@ -146,5 +229,14 @@ def parse_datasets(data: dict[str, Any]) -> list[DatasetInfo]:
             continue
         description = record_set.get("description", "")
         file_glob = _resolve_file_glob(record_set, distribution)
-        datasets.append(DatasetInfo(name=name, description=description, file_glob=file_glob))
+        fields = tuple(
+            _parse_field(field)
+            for field in record_set.get("field") or []
+            if isinstance(field, dict)
+        )
+        datasets.append(
+            DatasetInfo(
+                name=name, description=description, file_glob=file_glob, fields=fields
+            )
+        )
     return datasets
