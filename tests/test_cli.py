@@ -217,3 +217,73 @@ def test_list_datasets_builds_catalog_schema_on_first_run(tmp_path, fixture_rele
         assert release in schemas
     finally:
         conn.close()
+
+
+def test_run_sql_json_output_against_latest(tmp_path, fixture_release_layout):
+    base_uri, release, _dataset_rows = fixture_release_layout
+
+    result = _invoke_with_fixtures(
+        ["run-sql", "SELECT id, approvedSymbol FROM target ORDER BY id"],
+        tmp_path / "cache",
+        base_uri,
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["data"]["release"] == release
+    assert payload["data"]["columns"] == ["id", "approvedSymbol"]
+    assert payload["data"]["rows"] == [
+        ["ENSG00000141510", "TP53"],
+        ["ENSG00000157764", "BRAF"],
+    ]
+
+
+def test_run_sql_table_format(tmp_path, fixture_release_layout):
+    base_uri, _release, _dataset_rows = fixture_release_layout
+
+    result = _invoke_with_fixtures(
+        ["run-sql", "SELECT id, approvedSymbol FROM target ORDER BY id", "--format", "table"],
+        tmp_path / "cache",
+        base_uri,
+    )
+
+    assert result.exit_code == 0
+    assert "approvedSymbol" in result.stdout
+    assert "BRAF" in result.stdout
+
+
+def test_run_sql_has_no_release_flag(tmp_path, fixture_release_layout):
+    base_uri, _release, _dataset_rows = fixture_release_layout
+
+    result = _invoke_with_fixtures(
+        ["run-sql", "SELECT 1", "--release", "26.06"], tmp_path / "cache", base_uri
+    )
+
+    assert result.exit_code != 0
+
+
+def test_run_sql_rejects_non_select_statement(tmp_path, fixture_release_layout):
+    base_uri, _release, _dataset_rows = fixture_release_layout
+
+    result = _invoke_with_fixtures(
+        ["run-sql", "DROP TABLE target"], tmp_path / "cache", base_uri
+    )
+
+    assert result.exit_code != 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "guardrail_violation"
+
+
+def test_run_sql_malformed_query_returns_sql_error(tmp_path, fixture_release_layout):
+    base_uri, _release, _dataset_rows = fixture_release_layout
+
+    result = _invoke_with_fixtures(
+        ["run-sql", "SELECT * FROM target WHERE ("], tmp_path / "cache", base_uri
+    )
+
+    assert result.exit_code != 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "sql_error"
