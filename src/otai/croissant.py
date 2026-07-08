@@ -14,9 +14,10 @@ and never re-fetched once present (PRD §5).
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.request import urlopen
 
 BUCKET = "open-targets-public-data-releases"

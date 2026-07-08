@@ -176,7 +176,9 @@ def run_sql_cmd(
         _emit_error(result, format)
     elif format == "table":
         columns = result["data"]["columns"]
-        row_dicts = [dict(zip(columns, row)) for row in result["data"]["rows"]]
+        row_dicts = [
+            dict(zip(columns, row, strict=False)) for row in result["data"]["rows"]
+        ]
         typer.echo(formatting.render_table(row_dicts))
     else:
         typer.echo(json.dumps(result))

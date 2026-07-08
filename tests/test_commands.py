@@ -2,9 +2,9 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import Mock
 
-from otai import catalog, commands
-
 from test_croissant import CROISSANT_FIXTURE
+
+from otai import catalog, commands
 
 SAMPLE_LISTING_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
@@ -69,7 +69,9 @@ class TestListDatasets:
     def _fetch_croissant(self):
         return Mock(return_value=json.dumps(CROISSANT_FIXTURE).encode())
 
-    def test_defaults_to_latest_release_and_lists_datasets(self, tmp_path, fixture_release_layout):
+    def test_defaults_to_latest_release_and_lists_datasets(
+        self, tmp_path, fixture_release_layout
+    ):
         base_uri, release, dataset_rows = fixture_release_layout
         fetch_croissant = self._fetch_croissant()
 
@@ -106,7 +108,9 @@ class TestListDatasets:
         # An explicit --release must skip latest-resolution entirely.
         fetch_xml.assert_not_called()
 
-    def test_builds_release_schema_lazily_and_reuses_it(self, tmp_path, fixture_release_layout):
+    def test_builds_release_schema_lazily_and_reuses_it(
+        self, tmp_path, fixture_release_layout
+    ):
         base_uri, release, dataset_rows = fixture_release_layout
         fetch_croissant = self._fetch_croissant()
 
@@ -137,7 +141,9 @@ class TestListDatasets:
         assert second["ok"] is True
         assert {d["dataset"] for d in second["data"]["datasets"]} == set(dataset_rows)
 
-    def test_croissant_fetched_once_then_cached_across_calls(self, tmp_path, fixture_release_layout):
+    def test_croissant_fetched_once_then_cached_across_calls(
+        self, tmp_path, fixture_release_layout
+    ):
         base_uri, release, _dataset_rows = fixture_release_layout
         fetch_croissant = self._fetch_croissant()
 
@@ -166,7 +172,10 @@ class TestListDatasets:
         fetch_xml = Mock(side_effect=OSError("network unreachable"))
 
         result = commands.list_datasets(
-            tmp_path, fetch_xml=fetch_xml, fetch_croissant=self._fetch_croissant(), now=self.NOW
+            tmp_path,
+            fetch_xml=fetch_xml,
+            fetch_croissant=self._fetch_croissant(),
+            now=self.NOW,
         )
 
         assert result["ok"] is False
@@ -344,7 +353,9 @@ class TestRunSql:
     def _fetch_croissant(self):
         return Mock(return_value=json.dumps(CROISSANT_FIXTURE).encode())
 
-    def test_executes_against_latest_via_search_path(self, tmp_path, fixture_release_layout):
+    def test_executes_against_latest_via_search_path(
+        self, tmp_path, fixture_release_layout
+    ):
         base_uri, release, _dataset_rows = fixture_release_layout
 
         result = commands.run_sql(
@@ -389,7 +400,9 @@ class TestRunSql:
         finally:
             conn.close()
 
-    def test_rejects_non_select_with_guardrail_violation(self, tmp_path, fixture_release_layout):
+    def test_rejects_non_select_with_guardrail_violation(
+        self, tmp_path, fixture_release_layout
+    ):
         base_uri, _release, _dataset_rows = fixture_release_layout
 
         result = commands.run_sql(
@@ -409,7 +422,8 @@ class TestRunSql:
 
         result = commands.run_sql(
             tmp_path,
-            'WITH x AS (INSERT INTO target VALUES ("z", "Z", []) RETURNING *) SELECT * FROM x',
+            'WITH x AS (INSERT INTO target VALUES ("z", "Z", []) RETURNING *) '
+            "SELECT * FROM x",
             fetch_xml=self._fetch_xml(),
             fetch_croissant=self._fetch_croissant(),
             base_uri=base_uri,
@@ -529,14 +543,14 @@ class TestRunSql:
         finally:
             conn.close()
 
-    def test_unqualified_names_still_resolve_only_to_latest_alongside_a_qualified_release(
+    def test_unqualified_names_still_resolve_only_to_latest_alongside_qualified(
         self, tmp_path, fixture_two_release_layout
     ):
         base_uri, latest, other, _rows = fixture_two_release_layout
 
         result = commands.run_sql(
             tmp_path,
-            f'SELECT t.id, t.approvedSymbol, o.approvedSymbol AS old_symbol '
+            f"SELECT t.id, t.approvedSymbol, o.approvedSymbol AS old_symbol "
             f'FROM target t JOIN "{other}".target o ON t.id = o.id ORDER BY t.id',
             fetch_xml=self._fetch_xml(),
             fetch_croissant=self._fetch_croissant(),
@@ -558,7 +572,7 @@ class TestRunSql:
 
         result = commands.run_sql(
             tmp_path,
-            f'SELECT a.id, a.approvedSymbol, b.approvedSymbol '
+            f"SELECT a.id, a.approvedSymbol, b.approvedSymbol "
             f'FROM "{latest}".target a JOIN "{other}".target b ON a.id = b.id '
             f"ORDER BY a.id",
             fetch_xml=self._fetch_xml(),

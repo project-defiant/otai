@@ -120,9 +120,7 @@ class TestExtractSchemaQualifiers:
 def synthetic_conn():
     conn = duckdb.connect()
     conn.execute("CREATE TABLE target (id INTEGER, symbol VARCHAR)")
-    conn.execute(
-        "INSERT INTO target VALUES (1, 'BRAF'), (2, 'TP53'), (3, 'EGFR')"
-    )
+    conn.execute("INSERT INTO target VALUES (1, 'BRAF'), (2, 'TP53'), (3, 'EGFR')")
     yield conn
     conn.close()
 
@@ -152,7 +150,10 @@ class TestRunGuardedQuery:
     def test_nested_mutation_in_cte_returns_guardrail_violation_error(
         self, synthetic_conn
     ):
-        sql = "WITH x AS (INSERT INTO target VALUES (99, 'X') RETURNING *) SELECT * FROM x"
+        sql = (
+            "WITH x AS (INSERT INTO target VALUES (99, 'X') RETURNING *) "
+            "SELECT * FROM x"
+        )
 
         result = sql_guard.run_guarded_query(synthetic_conn, sql)
 
@@ -205,9 +206,7 @@ class TestRunGuardedQuery:
         # to reliably still be running past a very short timeout - this
         # exercises the real timeout/interrupt path against a real DuckDB
         # connection, not a mocked one (PRD §10).
-        slow_sql = (
-            "SELECT count(*) FROM range(100000000) a, range(100000) b"
-        )
+        slow_sql = "SELECT count(*) FROM range(100000000) a, range(100000) b"
 
         result = sql_guard.run_guarded_query(
             synthetic_conn, slow_sql, timeout_seconds=0.2

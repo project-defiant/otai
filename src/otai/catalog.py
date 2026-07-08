@@ -35,5 +35,7 @@ def connect_catalog(cache_dir: Path) -> duckdb.DuckDBPyConnection:
 
 def list_cached_schemas(conn: duckdb.DuckDBPyConnection) -> list[str]:
     """List release schemas already present in the catalog (built-ins excluded)."""
-    rows = conn.execute("SELECT schema_name FROM information_schema.schemata").fetchall()
+    rows = conn.execute(
+        "SELECT schema_name FROM information_schema.schemata"
+    ).fetchall()
     return sorted({row[0] for row in rows} - BUILTIN_SCHEMAS)
