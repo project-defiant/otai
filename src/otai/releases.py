@@ -6,18 +6,21 @@ s3://open-targets-public-data-releases/platform/, e.g. 25.12, 26.03, 26.06.
 
 Listing the bucket is a real network call in production; every entry point
 here that touches the network takes an injectable fetch function so tests
-can run fully offline (PRD §10).
+can run fully offline (PRD §10). Reading and writing the cache file itself
+(corrupt-cache tolerance, atomic writes) is shared with croissant.py's
+cache via `json_cache.py`.
 """
 
 from __future__ import annotations
 
-import json
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen
 
 from loguru import logger
+
+from otai.json_cache import read_json_or_none, write_json_atomic
 
 BUCKET = "open-targets-public-data-releases"
 PREFIX = "platform/"
@@ -66,27 +69,15 @@ def _cache_path(cache_dir: Path) -> Path:
     return Path(cache_dir) / CACHE_FILENAME
 
 
-def _load_cache(cache_dir: Path) -> dict | None:
-    path = _cache_path(cache_dir)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return None
-
-
 def _save_cache(
     cache_dir: Path, release_names: list[str], latest: str, resolved_at: datetime
 ) -> None:
-    cache_dir = Path(cache_dir)
-    cache_dir.mkdir(parents=True, exist_ok=True)
     payload = {
         "releases": release_names,
         "latest": latest,
         "resolved_at": resolved_at.isoformat(),
     }
-    _cache_path(cache_dir).write_text(json.dumps(payload))
+    write_json_atomic(_cache_path(cache_dir), payload)
 
 
 def _is_fresh(cache: dict, now: datetime) -> bool:
@@ -119,7 +110,7 @@ def get_releases(
     Returns (release_names, latest, from_cache).
     """
     now = now or datetime.now(timezone.utc)
-    cache = _load_cache(cache_dir)
+    cache = read_json_or_none(_cache_path(cache_dir))
     if cache is not None and _is_fresh(cache, now):
         logger.debug(f"Using cached release list (latest={cache['latest']!r})")
         return cache["releases"], cache["latest"], True

@@ -53,6 +53,21 @@ def _emit_error(result: dict, output_format: str) -> None:
     raise typer.Exit(code=1)
 
 
+def _emit(result: dict, output_format: str, table_rows=None) -> None:
+    """Emit `result` as JSON or `--format table`, the tail every command shares.
+
+    `table_rows` extracts the list of row-dicts to render from `result["data"]`
+    when `output_format == "table"`; omit it when `data` is already that list.
+    """
+    if not result["ok"]:
+        _emit_error(result, output_format)
+    elif output_format == "table":
+        rows = table_rows(result["data"]) if table_rows else result["data"]
+        typer.echo(formatting.render_table(rows))
+    else:
+        typer.echo(json.dumps(result))
+
+
 @app.command("list-releases")
 def list_releases_cmd(
     format: str = typer.Option(
@@ -66,17 +81,12 @@ def list_releases_cmd(
     cache_dir = config.get_cache_dir()
     # Look up the fetch function fresh on every call (rather than relying on
     # commands.list_releases's bound-at-import-time default) so tests that
-    # patch otai.releases.default_fetch_listing_xml are honored here too.
+    # patch otai.releases.default_fetch_listing_xml are honored here too -
+    # every command below does the same for the same reason.
     result = commands.list_releases(
         cache_dir, fetch_xml=releases_mod.default_fetch_listing_xml
     )
-
-    if not result["ok"]:
-        _emit_error(result, format)
-    elif format == "table":
-        typer.echo(formatting.render_table(result["data"]["releases"]))
-    else:
-        typer.echo(json.dumps(result))
+    _emit(result, format, lambda data: data["releases"])
 
 
 @app.command("list-datasets")
@@ -96,8 +106,6 @@ def list_datasets_cmd(
     """List datasets (croissant recordSets) for one release."""
     cache_dir = config.get_cache_dir()
     base_uri = config.get_base_uri()
-    # Same reasoning as list_releases_cmd above: look up both fetch
-    # functions fresh on every call so test patches are honored.
     result = commands.list_datasets(
         cache_dir,
         release=release,
@@ -105,13 +113,7 @@ def list_datasets_cmd(
         fetch_croissant=croissant.default_fetch_croissant,
         base_uri=base_uri,
     )
-
-    if not result["ok"]:
-        _emit_error(result, format)
-    elif format == "table":
-        typer.echo(formatting.render_table(result["data"]["datasets"]))
-    else:
-        typer.echo(json.dumps(result))
+    _emit(result, format, lambda data: data["datasets"])
 
 
 @app.command("describe-dataset")
@@ -131,8 +133,6 @@ def describe_dataset_cmd(
 ) -> None:
     """Describe one dataset's fields: names, types, descriptions, relationships."""
     cache_dir = config.get_cache_dir()
-    # Same reasoning as list_datasets_cmd above: look up both fetch
-    # functions fresh on every call so test patches are honored.
     result = commands.describe_dataset(
         cache_dir,
         name,
@@ -140,13 +140,7 @@ def describe_dataset_cmd(
         fetch_xml=releases_mod.default_fetch_listing_xml,
         fetch_croissant=croissant.default_fetch_croissant,
     )
-
-    if not result["ok"]:
-        _emit_error(result, format)
-    elif format == "table":
-        typer.echo(formatting.render_table(result["data"]["fields"]))
-    else:
-        typer.echo(json.dumps(result))
+    _emit(result, format, lambda data: data["fields"])
 
 
 @app.command("run-sql")
@@ -166,8 +160,6 @@ def run_sql_cmd(
     """
     cache_dir = config.get_cache_dir()
     base_uri = config.get_base_uri()
-    # Same reasoning as the other commands above: look up both fetch
-    # functions fresh on every call so test patches are honored.
     result = commands.run_sql(
         cache_dir,
         query,
@@ -175,17 +167,13 @@ def run_sql_cmd(
         fetch_croissant=croissant.default_fetch_croissant,
         base_uri=base_uri,
     )
-
-    if not result["ok"]:
-        _emit_error(result, format)
-    elif format == "table":
-        columns = result["data"]["columns"]
-        row_dicts = [
-            dict(zip(columns, row, strict=False)) for row in result["data"]["rows"]
-        ]
-        typer.echo(formatting.render_table(row_dicts))
-    else:
-        typer.echo(json.dumps(result))
+    _emit(
+        result,
+        format,
+        lambda data: [
+            dict(zip(data["columns"], row, strict=False)) for row in data["rows"]
+        ],
+    )
 
 
 def main() -> None:

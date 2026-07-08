@@ -1,5 +1,5 @@
 import json
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -232,33 +232,15 @@ class TestGetCroissant:
         assert json.loads(cache_file.read_text()) == CROISSANT_FIXTURE
 
     def test_cache_write_is_atomic_no_leftover_tmp_file(self, tmp_path):
+        # Atomic-write mechanics themselves (including the failure/cleanup
+        # path) are unit-tested directly in test_json_cache.py; this just
+        # confirms get_croissant is wired to it and leaves a clean result.
         fetch = Mock(return_value=json.dumps(CROISSANT_FIXTURE).encode())
         croissant.get_croissant(tmp_path, "26.06", fetch=fetch)
 
         release_dir = tmp_path / "26.06"
         leftovers = [p for p in release_dir.iterdir() if p.name != "croissant.json"]
         assert leftovers == []
-
-    def test_failed_write_cleans_up_temp_file_and_leaves_original_untouched(
-        self, tmp_path
-    ):
-        cache_file = tmp_path / "26.06" / "croissant.json"
-        cache_file.parent.mkdir(parents=True)
-        cache_file.write_text("{not valid json")  # corrupt -> triggers refetch+write
-
-        fetch = Mock(return_value=json.dumps(CROISSANT_FIXTURE).encode())
-        with (
-            patch("otai.croissant.os.replace", side_effect=OSError("disk full")),
-            pytest.raises(OSError, match="disk full"),
-        ):
-            croissant.get_croissant(tmp_path, "26.06", fetch=fetch)
-
-        # The failed atomic rename must not leave a temp file behind, and
-        # the pre-existing (corrupt) file must be untouched, not overwritten
-        # with a partial write.
-        remaining = list(cache_file.parent.iterdir())
-        assert remaining == [cache_file]
-        assert cache_file.read_text() == "{not valid json"
 
     def test_invalid_json_raises_croissant_error(self, tmp_path):
         fetch = Mock(return_value=b"not json")
