@@ -72,6 +72,50 @@ class TestValidateReadOnly:
             sql_guard.validate_read_only("SELEKT FRUM WHERE ??")
 
 
+class TestExtractSchemaQualifiers:
+    def test_unqualified_table_yields_no_qualifiers(self):
+        assert sql_guard.extract_schema_qualifiers("SELECT * FROM target") == []
+
+    def test_single_qualified_table_yields_its_release(self):
+        sql = 'SELECT * FROM "26.03".target'
+        assert sql_guard.extract_schema_qualifiers(sql) == ["26.03"]
+
+    def test_mixed_qualified_and_unqualified_only_collects_qualified(self):
+        sql = 'SELECT * FROM "26.03".target t JOIN disease d ON 1=1'
+        assert sql_guard.extract_schema_qualifiers(sql) == ["26.03"]
+
+    def test_two_distinct_qualifiers_in_a_join_both_collected_sorted_and_deduped(self):
+        sql = (
+            'SELECT * FROM "26.06".target a '
+            'JOIN "26.03".target b ON a.id = b.id '
+            'JOIN "26.06".disease c ON 1=1'
+        )
+        assert sql_guard.extract_schema_qualifiers(sql) == ["26.03", "26.06"]
+
+    def test_qualifier_inside_cte_and_subquery_is_still_collected(self):
+        sql = (
+            'WITH old AS (SELECT * FROM "26.03".target) '
+            "SELECT * FROM old WHERE id IN (SELECT id FROM old)"
+        )
+        assert sql_guard.extract_schema_qualifiers(sql) == ["26.03"]
+
+    def test_malformed_sql_returns_empty_list_rather_than_raising(self):
+        # Diagnosing malformed SQL is validate_read_only's job (sql_error);
+        # extraction is deliberately lenient so commands.run_sql can call it
+        # unconditionally before running the real guardrail check.
+        assert sql_guard.extract_schema_qualifiers("SELEKT FRUM WHERE ??") == []
+
+    def test_multiple_statements_returns_empty_list_rather_than_raising(self):
+        sql = 'SELECT * FROM "26.03".target; DROP TABLE target'
+        assert sql_guard.extract_schema_qualifiers(sql) == []
+
+    def test_qualifier_collected_even_for_non_select_statement(self):
+        # Guardrail rejection of non-SELECT statements happens later in
+        # validate_read_only; extraction itself just walks table refs.
+        sql = 'DROP TABLE "26.03".target'
+        assert sql_guard.extract_schema_qualifiers(sql) == ["26.03"]
+
+
 @pytest.fixture
 def synthetic_conn():
     conn = duckdb.connect()
