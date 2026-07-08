@@ -34,11 +34,12 @@ def _resolve_release(
         _release_names, release, _from_cache = releases_mod.get_releases(
             cache_dir, fetch_xml=fetch_xml, now=now
         )
-        return release, None
     except Exception as exc:  # noqa: BLE001 - surfaced as a structured envelope
         return None, envelope.failure(
             "s3_error", f"Failed to resolve latest release: {exc}"
         )
+    else:
+        return release, None
 
 
 def _load_datasets(

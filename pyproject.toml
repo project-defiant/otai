@@ -2,8 +2,8 @@
 name = "otai"
 version = "0.1.0"
 description = "Open Targets Agentic Query Tool - CLI for querying Open Targets Platform release data"
-readme = "PRD.md"
-requires-python = ">=3.10"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
 dependencies = [
     "typer>=0.12",
     "duckdb>=0.10",
@@ -34,7 +34,38 @@ testpaths = ["tests"]
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "S", "BLE"]
+select = [
+    "E",    # pycodestyle
+    "W",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "S",    # flake8-bandit
+    "BLE",  # flake8-blind-except
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "RET",  # flake8-return
+    "PIE",  # flake8-pie
+    "PT",   # flake8-pytest-style
+    "TID",  # flake8-tidy-imports
+    "T20",  # flake8-print
+    "ISC",  # flake8-implicit-str-concat
+    "COM",  # flake8-commas
+    "RUF",  # ruff-specific rules
+    "PERF", # perflint
+    "TRY",  # tryceratops
+]
+
+ignore = [
+    "COM812", # trailing commas conflict with the formatter
+    "TRY003", # long exception messages are fine here
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S608"]
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+mark-parentheses = false
