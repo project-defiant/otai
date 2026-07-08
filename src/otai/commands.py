@@ -11,9 +11,61 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from otai import catalog, envelope, schema_builder
+from otai import catalog, envelope, schema_builder, sql_guard
 from otai import croissant as croissant_mod
 from otai import releases as releases_mod
+
+
+def _resolve_release(
+    cache_dir: Path,
+    release: str | None,
+    fetch_xml,
+    now: datetime | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Resolve `release` to `latest` when omitted.
+
+    Returns `(release, None)` on success, or `(None, failure_envelope)` if
+    latest-resolution fails. Shared by list_datasets/describe_dataset/
+    run_sql, all of which default to `latest` the same way (PRD §6/§7).
+    """
+    if release is not None:
+        return release, None
+    try:
+        _release_names, release, _from_cache = releases_mod.get_releases(
+            cache_dir, fetch_xml=fetch_xml, now=now
+        )
+        return release, None
+    except Exception as exc:  # noqa: BLE001 - surfaced as a structured envelope
+        return None, envelope.failure(
+            "s3_error", f"Failed to resolve latest release: {exc}"
+        )
+
+
+def _load_datasets(
+    cache_dir: Path, release: str, fetch_croissant
+) -> tuple[list[croissant_mod.DatasetInfo] | None, dict[str, Any] | None]:
+    """Load (fetch-if-needed-cache) a release's parsed croissant datasets.
+
+    Returns `(datasets, None)` on success, or `(None, failure_envelope)`.
+    """
+    try:
+        croissant_data = croissant_mod.get_croissant(
+            cache_dir, release, fetch=fetch_croissant
+        )
+        return croissant_mod.parse_datasets(croissant_data), None
+    except Exception as exc:  # noqa: BLE001
+        return None, envelope.failure(
+            "croissant_error",
+            f"Failed to load croissant.json for release {release!r}: {exc}",
+        )
+
+
+def _ensure_release_schema(
+    conn, release: str, datasets: list[croissant_mod.DatasetInfo], base_uri: str
+) -> None:
+    """Build a release's DuckDB schema/views if not already present (PRD §6)."""
+    if release not in catalog.list_cached_schemas(conn):
+        schema_builder.build_release_schema(conn, release, datasets, base_uri)
 
 
 def list_releases(
@@ -67,32 +119,18 @@ def list_datasets(
     PRD §5) and its DuckDB schema/views exist (built lazily on first use -
     PRD §6), then returns each dataset's name and one-line description.
     """
-    if release is None:
-        try:
-            _release_names, release, _from_cache = releases_mod.get_releases(
-                cache_dir, fetch_xml=fetch_xml, now=now
-            )
-        except Exception as exc:  # noqa: BLE001 - surfaced as a structured envelope
-            return envelope.failure(
-                "s3_error", f"Failed to resolve latest release: {exc}"
-            )
+    release, error = _resolve_release(cache_dir, release, fetch_xml, now)
+    if error is not None:
+        return error
 
-    try:
-        croissant_data = croissant_mod.get_croissant(
-            cache_dir, release, fetch=fetch_croissant
-        )
-        datasets = croissant_mod.parse_datasets(croissant_data)
-    except Exception as exc:  # noqa: BLE001
-        return envelope.failure(
-            "croissant_error",
-            f"Failed to load croissant.json for release {release!r}: {exc}",
-        )
+    datasets, error = _load_datasets(cache_dir, release, fetch_croissant)
+    if error is not None:
+        return error
 
     conn = None
     try:
         conn = catalog.connect_catalog(cache_dir)
-        if release not in catalog.list_cached_schemas(conn):
-            schema_builder.build_release_schema(conn, release, datasets, base_uri)
+        _ensure_release_schema(conn, release, datasets, base_uri)
     except Exception as exc:  # noqa: BLE001
         return envelope.failure(
             "catalog_error",
@@ -122,26 +160,13 @@ def describe_dataset(
     cross-dataset `references`, and nested `subFields` (PRD §5/§7). Does
     not touch the DuckDB catalog: this command has no need for the views.
     """
-    if release is None:
-        try:
-            _release_names, release, _from_cache = releases_mod.get_releases(
-                cache_dir, fetch_xml=fetch_xml, now=now
-            )
-        except Exception as exc:  # noqa: BLE001 - surfaced as a structured envelope
-            return envelope.failure(
-                "s3_error", f"Failed to resolve latest release: {exc}"
-            )
+    release, error = _resolve_release(cache_dir, release, fetch_xml, now)
+    if error is not None:
+        return error
 
-    try:
-        croissant_data = croissant_mod.get_croissant(
-            cache_dir, release, fetch=fetch_croissant
-        )
-        datasets = croissant_mod.parse_datasets(croissant_data)
-    except Exception as exc:  # noqa: BLE001
-        return envelope.failure(
-            "croissant_error",
-            f"Failed to load croissant.json for release {release!r}: {exc}",
-        )
+    datasets, error = _load_datasets(cache_dir, release, fetch_croissant)
+    if error is not None:
+        return error
 
     dataset = next((d for d in datasets if d.name == name), None)
     if dataset is None:
@@ -158,3 +183,62 @@ def describe_dataset(
             "fields": [field.as_dict() for field in dataset.fields],
         }
     )
+
+
+def run_sql(
+    cache_dir: Path,
+    query: str,
+    fetch_xml=releases_mod.default_fetch_listing_xml,
+    fetch_croissant=croissant_mod.default_fetch_croissant,
+    base_uri: str = schema_builder.DEFAULT_BASE_URI,
+    now: datetime | None = None,
+    row_cap: int = sql_guard.DEFAULT_ROW_CAP,
+    timeout_seconds: float = sql_guard.DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Implements `otai run-sql "<query>"`: guarded read-only SQL against `latest`.
+
+    Unlike list_datasets/describe_dataset, there is no `--release` flag
+    (PRD §7): this always resolves `latest`, ensures its croissant is
+    cached and its DuckDB schema/views exist (same lazy-init pattern), then
+    points the connection's search_path at that release's schema so
+    unqualified table names resolve there without callers needing to write
+    `"<release>".table`. Actual read-only enforcement, timeout, and row-cap
+    guardrails live in sql_guard.run_guarded_query, which this delegates to
+    so that guardrail logic stays unit-testable independent of release
+    resolution (PRD §10).
+
+    Schema-qualified references to *other* releases (e.g. "26.03".target)
+    are out of scope here (issue #5): they simply fail naturally as a
+    DuckDB "schema not found" error, surfaced below as `sql_error`.
+    """
+    release, error = _resolve_release(cache_dir, None, fetch_xml, now)
+    if error is not None:
+        return error
+
+    datasets, error = _load_datasets(cache_dir, release, fetch_croissant)
+    if error is not None:
+        return error
+
+    conn = None
+    try:
+        conn = catalog.connect_catalog(cache_dir)
+        _ensure_release_schema(conn, release, datasets, base_uri)
+        conn.execute("SET search_path = ?", [f'"{release}"'])
+    except Exception as exc:  # noqa: BLE001
+        if conn is not None:
+            conn.close()
+        return envelope.failure(
+            "catalog_error",
+            f"Failed to prepare release {release!r} for querying: {exc}",
+        )
+
+    try:
+        result = sql_guard.run_guarded_query(
+            conn, query, row_cap=row_cap, timeout_seconds=timeout_seconds
+        )
+    finally:
+        conn.close()
+
+    if result["ok"]:
+        result["data"]["release"] = release
+    return result
