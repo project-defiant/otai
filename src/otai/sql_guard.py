@@ -152,11 +152,10 @@ def validate_read_only(sql: str) -> None:
 def extract_schema_qualifiers(sql: str) -> list[str]:
     """Collect every distinct schema/db qualifier used in `sql`'s table refs.
 
-    Walks every `exp.Table` node in the parsed AST (PRD §6/§7, issue #5) and
-    returns the sorted, deduplicated set of schema qualifiers found (e.g.
+    Walks every `exp.Table` node in the parsed AST (PRD §6/§7) and returns
+    the sorted, deduplicated set of schema qualifiers found (e.g.
     `"26.03".target` -> `"26.03"`). Table references with no qualifier are
-    not included - those resolve via `search_path` to `latest`, unchanged
-    from issue #4.
+    not included - those resolve via `search_path` to `latest`.
 
     Deliberately lenient: diagnosing malformed or multi-statement SQL is
     `validate_read_only`'s job (it raises `SqlError`/`GuardrailViolationError`
