@@ -46,12 +46,12 @@ class TestValidateReadOnly:
         ],
     )
     def test_rejects_non_read_only_statements(self, sql):
-        with pytest.raises(sql_guard.GuardrailViolation):
+        with pytest.raises(sql_guard.GuardrailViolationError):
             sql_guard.validate_read_only(sql)
 
     def test_rejects_mutating_statement_nested_inside_cte(self):
         sql = "WITH x AS (INSERT INTO t VALUES (1) RETURNING *) SELECT * FROM x"
-        with pytest.raises(sql_guard.GuardrailViolation):
+        with pytest.raises(sql_guard.GuardrailViolationError):
             sql_guard.validate_read_only(sql)
 
     def test_rejects_ddl_nested_inside_subquery(self):
@@ -59,12 +59,12 @@ class TestValidateReadOnly:
             "SELECT * FROM (SELECT * FROM target) AS t "
             "WHERE t.id IN (SELECT id FROM (DROP TABLE target) AS dropped)"
         )
-        with pytest.raises((sql_guard.GuardrailViolation, sql_guard.SqlError)):
+        with pytest.raises((sql_guard.GuardrailViolationError, sql_guard.SqlError)):
             sql_guard.validate_read_only(sql)
 
     def test_rejects_multiple_statements(self):
         sql = "SELECT * FROM target; DROP TABLE target"
-        with pytest.raises(sql_guard.GuardrailViolation):
+        with pytest.raises(sql_guard.GuardrailViolationError):
             sql_guard.validate_read_only(sql)
 
     def test_malformed_sql_raises_sql_error(self):
