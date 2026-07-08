@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from otai import catalog, envelope, schema_builder, sql_guard
 from otai import croissant as croissant_mod
@@ -122,10 +122,12 @@ def list_datasets(
     release, error = _resolve_release(cache_dir, release, fetch_xml, now)
     if error is not None:
         return error
+    release = cast(str, release)
 
     datasets, error = _load_datasets(cache_dir, release, fetch_croissant)
     if error is not None:
         return error
+    datasets = cast(list[croissant_mod.DatasetInfo], datasets)
 
     conn = None
     try:
@@ -163,10 +165,12 @@ def describe_dataset(
     release, error = _resolve_release(cache_dir, release, fetch_xml, now)
     if error is not None:
         return error
+    release = cast(str, release)
 
     datasets, error = _load_datasets(cache_dir, release, fetch_croissant)
     if error is not None:
         return error
+    datasets = cast(list[croissant_mod.DatasetInfo], datasets)
 
     dataset = next((d for d in datasets if d.name == name), None)
     if dataset is None:
@@ -224,28 +228,27 @@ def run_sql(
     release, error = _resolve_release(cache_dir, None, fetch_xml, now)
     if error is not None:
         return error
+    release = cast(str, release)
 
     try:
         release_names, _latest, _from_cache = releases_mod.get_releases(
             cache_dir, fetch_xml=fetch_xml, now=now
         )
     except Exception as exc:  # noqa: BLE001
-        return envelope.failure(
-            "s3_error", f"Failed to resolve known releases: {exc}"
-        )
+        return envelope.failure("s3_error", f"Failed to resolve known releases: {exc}")
 
     qualifiers = sql_guard.extract_schema_qualifiers(query)
     unknown_qualifiers = sorted(set(qualifiers) - set(release_names))
     if unknown_qualifiers:
         return envelope.failure(
             "release_not_found",
-            "Query references unknown release(s): "
-            + ", ".join(unknown_qualifiers),
+            "Query references unknown release(s): " + ", ".join(unknown_qualifiers),
         )
 
     datasets, error = _load_datasets(cache_dir, release, fetch_croissant)
     if error is not None:
         return error
+    datasets = cast(list[croissant_mod.DatasetInfo], datasets)
 
     extra_releases = sorted(set(qualifiers) - {release})
 
@@ -261,6 +264,7 @@ def run_sql(
             if extra_error is not None:
                 conn.close()
                 return extra_error
+            extra_datasets = cast(list[croissant_mod.DatasetInfo], extra_datasets)
             _ensure_release_schema(conn, extra_release, extra_datasets, base_uri)
 
         conn.execute("SET search_path = ?", [f'"{release}"'])

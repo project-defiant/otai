@@ -1,10 +1,10 @@
 import json
 from unittest.mock import patch
 
+from test_croissant import CROISSANT_FIXTURE
 from typer.testing import CliRunner
 
 from otai.cli import app
-from test_croissant import CROISSANT_FIXTURE
 
 runner = CliRunner()
 
@@ -82,9 +82,7 @@ def test_unknown_format_is_rejected(tmp_path):
 def test_list_datasets_json_output_defaults_to_latest(tmp_path, fixture_release_layout):
     base_uri, release, dataset_rows = fixture_release_layout
 
-    result = _invoke_with_fixtures(
-        ["list-datasets"], tmp_path / "cache", base_uri
-    )
+    result = _invoke_with_fixtures(["list-datasets"], tmp_path / "cache", base_uri)
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -119,7 +117,9 @@ def test_list_datasets_accepts_explicit_release(tmp_path, fixture_release_layout
     assert payload["data"]["release"] == release
 
 
-def test_describe_dataset_json_output_defaults_to_latest(tmp_path, fixture_release_layout):
+def test_describe_dataset_json_output_defaults_to_latest(
+    tmp_path, fixture_release_layout
+):
     base_uri, release, _dataset_rows = fixture_release_layout
 
     result = _invoke_with_fixtures(
@@ -135,7 +135,9 @@ def test_describe_dataset_json_output_defaults_to_latest(tmp_path, fixture_relea
     assert fields_by_name["id"]["dataType"] == "sc:Text"
 
 
-def test_describe_dataset_includes_references_and_subfields(tmp_path, fixture_release_layout):
+def test_describe_dataset_includes_references_and_subfields(
+    tmp_path, fixture_release_layout
+):
     base_uri, _release, _dataset_rows = fixture_release_layout
 
     result = _invoke_with_fixtures(
@@ -164,7 +166,9 @@ def test_describe_dataset_table_format(tmp_path, fixture_release_layout):
     base_uri, _release, _dataset_rows = fixture_release_layout
 
     result = _invoke_with_fixtures(
-        ["describe-dataset", "target", "--format", "table"], tmp_path / "cache", base_uri
+        ["describe-dataset", "target", "--format", "table"],
+        tmp_path / "cache",
+        base_uri,
     )
 
     assert result.exit_code == 0
@@ -177,7 +181,9 @@ def test_describe_dataset_accepts_explicit_release(tmp_path, fixture_release_lay
     base_uri, release, _dataset_rows = fixture_release_layout
 
     result = _invoke_with_fixtures(
-        ["describe-dataset", "target", "--release", release], tmp_path / "cache", base_uri
+        ["describe-dataset", "target", "--release", release],
+        tmp_path / "cache",
+        base_uri,
     )
 
     assert result.exit_code == 0
@@ -185,7 +191,9 @@ def test_describe_dataset_accepts_explicit_release(tmp_path, fixture_release_lay
     assert payload["data"]["release"] == release
 
 
-def test_describe_dataset_unknown_dataset_returns_error(tmp_path, fixture_release_layout):
+def test_describe_dataset_unknown_dataset_returns_error(
+    tmp_path, fixture_release_layout
+):
     base_uri, _release, _dataset_rows = fixture_release_layout
 
     result = _invoke_with_fixtures(
@@ -198,7 +206,9 @@ def test_describe_dataset_unknown_dataset_returns_error(tmp_path, fixture_releas
     assert payload["error"]["type"] == "dataset_not_found"
 
 
-def test_list_datasets_builds_catalog_schema_on_first_run(tmp_path, fixture_release_layout):
+def test_list_datasets_builds_catalog_schema_on_first_run(
+    tmp_path, fixture_release_layout
+):
     base_uri, release, _dataset_rows = fixture_release_layout
     cache_dir = tmp_path / "cache"
 
@@ -243,7 +253,12 @@ def test_run_sql_table_format(tmp_path, fixture_release_layout):
     base_uri, _release, _dataset_rows = fixture_release_layout
 
     result = _invoke_with_fixtures(
-        ["run-sql", "SELECT id, approvedSymbol FROM target ORDER BY id", "--format", "table"],
+        [
+            "run-sql",
+            "SELECT id, approvedSymbol FROM target ORDER BY id",
+            "--format",
+            "table",
+        ],
         tmp_path / "cache",
         base_uri,
     )

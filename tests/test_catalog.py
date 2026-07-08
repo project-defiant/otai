@@ -1,7 +1,3 @@
-from pathlib import Path
-
-import duckdb
-
 from otai import catalog
 
 
