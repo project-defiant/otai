@@ -8,12 +8,20 @@ with the parquet file glob backing it (`fileSet`, via `distribution`).
 
 Unlike the "latest release" cache (24h TTL, see releases.py), a release's
 croissant.json is immutable once published: it is cached locally forever
-and never re-fetched once present (PRD §5).
+and never re-fetched once a *valid* cache exists (PRD §5). A corrupt or
+unreadable cache (e.g. from an interrupted write) is treated as a cache
+miss and silently refetched, same as releases.py already does for its own
+cache - the write itself is atomic (temp file + rename) so an interruption
+mid-write can't leave a corrupt file in the first place, but this also
+covers a cache corrupted by any other means (disk error, manual edit).
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +56,37 @@ def _cache_path(cache_dir: Path, release: str) -> Path:
     return Path(cache_dir) / release / CROISSANT_FILENAME
 
 
+def _load_cached_croissant(cache_dir: Path, release: str) -> dict[str, Any] | None:
+    """Return the cached croissant.json for a release, or `None` if absent/corrupt."""
+    path = _cache_path(cache_dir, release)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None
+
+
+def _save_croissant_cache(cache_dir: Path, release: str, data: dict[str, Any]) -> None:
+    """Write the cache atomically: write to a temp file, then rename over the
+    target. The rename is atomic on POSIX, so a crash/interruption mid-write
+    can never leave a partially-written (corrupt) cache file in its place.
+    """
+    path = _cache_path(cache_dir, release)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{CROISSANT_FILENAME}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w") as tmp_file:
+            tmp_file.write(json.dumps(data))
+        os.replace(tmp_path, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
+
+
 def get_croissant(
     cache_dir: Path,
     release: str,
@@ -55,17 +94,14 @@ def get_croissant(
 ) -> dict[str, Any]:
     """Return the parsed croissant.json for a release, fetching+caching if absent.
 
-    A release's croissant.json is never re-fetched once cached (immutable
-    release data, PRD §5) - unlike releases.get_releases's TTL cache.
+    A release's croissant.json is never re-fetched once a *valid* cache
+    exists (immutable release data, PRD §5) - unlike releases.get_releases's
+    TTL cache. A corrupt cache is treated as a miss and refetched (see
+    module docstring), rather than permanently failing that release.
     """
-    path = _cache_path(cache_dir, release)
-    if path.exists():
-        try:
-            return json.loads(path.read_text())
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
-            raise CroissantError(
-                f"Cached croissant.json for release {release!r} is corrupt: {exc}"
-            ) from exc
+    cached = _load_cached_croissant(cache_dir, release)
+    if cached is not None:
+        return cached
 
     raw = fetch(release)
     try:
@@ -75,8 +111,7 @@ def get_croissant(
             f"Invalid croissant.json fetched for release {release!r}: {exc}"
         ) from exc
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data))
+    _save_croissant_cache(cache_dir, release, data)
     return data
 
 

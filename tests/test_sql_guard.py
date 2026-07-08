@@ -71,6 +71,31 @@ class TestValidateReadOnly:
         with pytest.raises(sql_guard.SqlError):
             sql_guard.validate_read_only("SELEKT FRUM WHERE ??")
 
+    def test_accepts_schema_qualified_table_reference(self):
+        sql_guard.validate_read_only('SELECT * FROM "26.03".target')  # must not raise
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "SELECT * FROM read_csv_auto('/etc/passwd')",
+            "SELECT * FROM read_parquet('s3://some-other-bucket/data.parquet')",
+            "SELECT * FROM read_parquet('https://example.com/data.parquet')",
+            "SELECT * FROM read_json_auto('/tmp/secret.json')",
+            "SELECT * FROM target t JOIN read_csv_auto('/etc/passwd') p ON 1=1",
+            "WITH x AS (SELECT * FROM read_csv_auto('/etc/passwd')) SELECT * FROM x",
+            "SELECT * FROM (SELECT * FROM read_csv_auto('/etc/passwd')) AS sub",
+        ],
+    )
+    def test_rejects_table_valued_functions_as_data_sources(self, sql):
+        # run-sql's contract is "query the release catalog only" - a bare
+        # SELECT statement shape isn't enough on its own to guarantee that,
+        # since table-valued functions can read arbitrary local or remote
+        # data instead of a release view. Covers top-level, JOIN, CTE, and
+        # subquery nesting - same "walk the entire AST" requirement as the
+        # mutation-in-CTE case above.
+        with pytest.raises(sql_guard.GuardrailViolationError):
+            sql_guard.validate_read_only(sql)
+
 
 class TestExtractSchemaQualifiers:
     def test_unqualified_table_yields_no_qualifiers(self):
@@ -169,6 +194,22 @@ class TestRunGuardedQuery:
 
         assert result["ok"] is False
         assert result["error"]["type"] == "sql_error"
+
+    def test_table_valued_function_cannot_read_an_arbitrary_file(
+        self, synthetic_conn, tmp_path
+    ):
+        # End-to-end version of TestValidateReadOnly's rejection test: prove
+        # a file genuinely outside the release catalog is never read, not
+        # just that the query is rejected in the abstract.
+        secret_file = tmp_path / "secret.csv"
+        secret_file.write_text("secret\n42\n")
+
+        result = sql_guard.run_guarded_query(
+            synthetic_conn, f"SELECT * FROM read_csv_auto('{secret_file}')"
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "guardrail_violation"
         assert result["error"]["message"]
 
     def test_query_against_unknown_table_returns_sql_error(self, synthetic_conn):
@@ -201,12 +242,25 @@ class TestRunGuardedQuery:
         assert result["ok"] is True
         assert result["data"]["truncated"] is False
 
+    @staticmethod
+    def _make_slow_query(conn):
+        # range() itself is no longer allowed as a guarded query's data
+        # source (validate_read_only now allowlists plain table/view names
+        # only, to block arbitrary-file-read table functions like
+        # read_csv_auto - see sql_guard's module docstring). Wrapping it in
+        # a view *outside* the guard preserves the "cheap to set up,
+        # expensive to actually execute" property this test needs: a view
+        # is just a stored query, so `SELECT FROM slow_a` still runs the
+        # same lazy range() computation at query time, while the guarded
+        # query itself sees only a plain view name.
+        conn.execute("CREATE VIEW slow_a AS SELECT * FROM range(100000000)")
+        conn.execute("CREATE VIEW slow_b AS SELECT * FROM range(100000)")
+        return "SELECT count(*) FROM slow_a a, slow_b b"
+
     def test_slow_query_is_killed_and_returns_timeout_error(self, synthetic_conn):
-        # A cross join over range() is cheap to set up but expensive enough
-        # to reliably still be running past a very short timeout - this
-        # exercises the real timeout/interrupt path against a real DuckDB
+        # Exercises the real timeout/interrupt path against a real DuckDB
         # connection, not a mocked one (PRD §10).
-        slow_sql = "SELECT count(*) FROM range(100000000) a, range(100000) b"
+        slow_sql = self._make_slow_query(synthetic_conn)
 
         result = sql_guard.run_guarded_query(
             synthetic_conn, slow_sql, timeout_seconds=0.2
@@ -216,8 +270,11 @@ class TestRunGuardedQuery:
         assert result["error"]["type"] == "timeout"
 
     def test_connection_is_reusable_after_a_timeout(self, synthetic_conn):
-        slow_sql = "SELECT count(*) FROM range(100000000) a, range(100000) b"
-        sql_guard.run_guarded_query(synthetic_conn, slow_sql, timeout_seconds=0.2)
+        slow_sql = self._make_slow_query(synthetic_conn)
+        timed_out = sql_guard.run_guarded_query(
+            synthetic_conn, slow_sql, timeout_seconds=0.2
+        )
+        assert timed_out["error"]["type"] == "timeout"  # sanity: it really timed out
 
         # The connection must survive the interrupt and still be usable.
         result = sql_guard.run_guarded_query(synthetic_conn, "SELECT 1 AS one")

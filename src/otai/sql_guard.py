@@ -18,6 +18,16 @@ smuggled inside a CTE or subquery is still caught, e.g.:
 parses as a top-level `Select` (with an `Insert` nested three levels down
 inside its `WITH` clause) - a naive "does the query start with SELECT"
 check would miss it entirely.
+
+Statement shape alone isn't enough, though: a bare `SELECT` can still read
+data outside the release catalog via a table-valued function, e.g.
+`SELECT * FROM read_csv_auto('/etc/passwd')`. sqlglot always parses a
+plain table/view reference's name as an `exp.Table` with `.this` an
+`exp.Identifier`; a function call used as a table source parses with
+something else there instead (`exp.Anonymous`, `exp.ReadParquet`, ...).
+`validate_read_only` allowlists on that shape (Identifier-only) rather
+than blocklisting specific function names, which would need updating
+every time DuckDB adds a new `read_*`/`*_scan` function.
 """
 
 from __future__ import annotations
@@ -124,6 +134,17 @@ def validate_read_only(sql: str) -> None:
                 f"({type(node).__name__}); only read-only SELECT/WITH "
                 "queries are permitted, including inside CTEs and "
                 "subqueries."
+            )
+        if isinstance(node, exp.Table) and not isinstance(node.this, exp.Identifier):
+            # Table-valued function used as a data source - see module
+            # docstring for why this is allowlisted rather than
+            # blocklisted by function name.
+            raise GuardrailViolationError(
+                "Query references a table-valued function "
+                f"({type(node.this).__name__}) as a data source; only "
+                "plain (optionally schema-qualified) table/view names are "
+                "allowed - run-sql may only query the release catalog, not "
+                "arbitrary files or external sources."
             )
 
 

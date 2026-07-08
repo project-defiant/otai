@@ -1,5 +1,5 @@
 import json
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -218,6 +218,47 @@ class TestGetCroissant:
         assert first["name"] == "Open Targets Platform 26.06"
         assert second["name"] == "Open Targets Platform 25.12"
         assert fetch.call_count == 2
+
+    def test_corrupt_cache_is_ignored_and_refetched(self, tmp_path):
+        cache_file = tmp_path / "26.06" / "croissant.json"
+        cache_file.parent.mkdir(parents=True)
+        cache_file.write_text("{not valid json")
+
+        fetch = Mock(return_value=json.dumps(CROISSANT_FIXTURE).encode())
+        data = croissant.get_croissant(tmp_path, "26.06", fetch=fetch)
+
+        assert data == CROISSANT_FIXTURE
+        fetch.assert_called_once_with("26.06")
+        assert json.loads(cache_file.read_text()) == CROISSANT_FIXTURE
+
+    def test_cache_write_is_atomic_no_leftover_tmp_file(self, tmp_path):
+        fetch = Mock(return_value=json.dumps(CROISSANT_FIXTURE).encode())
+        croissant.get_croissant(tmp_path, "26.06", fetch=fetch)
+
+        release_dir = tmp_path / "26.06"
+        leftovers = [p for p in release_dir.iterdir() if p.name != "croissant.json"]
+        assert leftovers == []
+
+    def test_failed_write_cleans_up_temp_file_and_leaves_original_untouched(
+        self, tmp_path
+    ):
+        cache_file = tmp_path / "26.06" / "croissant.json"
+        cache_file.parent.mkdir(parents=True)
+        cache_file.write_text("{not valid json")  # corrupt -> triggers refetch+write
+
+        fetch = Mock(return_value=json.dumps(CROISSANT_FIXTURE).encode())
+        with (
+            patch("otai.croissant.os.replace", side_effect=OSError("disk full")),
+            pytest.raises(OSError, match="disk full"),
+        ):
+            croissant.get_croissant(tmp_path, "26.06", fetch=fetch)
+
+        # The failed atomic rename must not leave a temp file behind, and
+        # the pre-existing (corrupt) file must be untouched, not overwritten
+        # with a partial write.
+        remaining = list(cache_file.parent.iterdir())
+        assert remaining == [cache_file]
+        assert cache_file.read_text() == "{not valid json"
 
     def test_invalid_json_raises_croissant_error(self, tmp_path):
         fetch = Mock(return_value=b"not json")

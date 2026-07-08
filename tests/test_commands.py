@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from test_croissant import CROISSANT_FIXTURE
 
@@ -140,6 +140,40 @@ class TestListDatasets:
         )
         assert second["ok"] is True
         assert {d["dataset"] for d in second["data"]["datasets"]} == set(dataset_rows)
+
+    def test_already_cached_release_never_opens_a_write_connection(
+        self, tmp_path, fixture_release_layout
+    ):
+        # Once a release's schema is built, list_datasets must never take
+        # the catalog's write lock again - it should read-only-peek, see
+        # it's already there, and skip connect_catalog entirely. This is
+        # what lets concurrent otai calls against an already-cached
+        # release avoid fighting over DuckDB's exclusive write lock.
+        base_uri, release, _dataset_rows = fixture_release_layout
+        fetch_croissant = self._fetch_croissant()
+        commands.list_datasets(
+            tmp_path,
+            release=release,
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=fetch_croissant,
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        with patch(
+            "otai.commands.catalog.connect_catalog",
+            side_effect=AssertionError("must not open a write connection"),
+        ):
+            second = commands.list_datasets(
+                tmp_path,
+                release=release,
+                fetch_xml=self._fetch_xml(),
+                fetch_croissant=fetch_croissant,
+                base_uri=base_uri,
+                now=self.NOW,
+            )
+
+        assert second["ok"] is True
 
     def test_croissant_fetched_once_then_cached_across_calls(
         self, tmp_path, fixture_release_layout
@@ -400,6 +434,39 @@ class TestRunSql:
         finally:
             conn.close()
 
+    def test_already_cached_release_queries_via_readonly_connection(
+        self, tmp_path, fixture_release_layout
+    ):
+        # Once latest's schema is built, run_sql must not take the write
+        # lock again - it should query via a read-only connection, which
+        # is also a second, engine-level enforcement of "never mutates"
+        # independent of sql_guard's own AST check.
+        base_uri, _release, _dataset_rows = fixture_release_layout
+        commands.run_sql(
+            tmp_path,
+            "SELECT * FROM target",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        with patch(
+            "otai.commands.catalog.connect_catalog",
+            side_effect=AssertionError("must not open a write connection"),
+        ):
+            result = commands.run_sql(
+                tmp_path,
+                "SELECT count(*) AS n FROM target",
+                fetch_xml=self._fetch_xml(),
+                fetch_croissant=self._fetch_croissant(),
+                base_uri=base_uri,
+                now=self.NOW,
+            )
+
+        assert result["ok"] is True
+        assert result["data"]["rows"] == [[2]]
+
     def test_rejects_non_select_with_guardrail_violation(
         self, tmp_path, fixture_release_layout
     ):
@@ -448,12 +515,40 @@ class TestRunSql:
         assert result["ok"] is False
         assert result["error"]["type"] == "sql_error"
 
+    def _build_schema_and_add_view(self, tmp_path, base_uri, release, view_sql):
+        # range() (and any table-valued function) is no longer allowed as a
+        # guarded query's data source (sql_guard now allowlists plain
+        # table/view names only - see test_sql_guard.py for that fix's
+        # rationale). To still exercise real row-cap/timeout behavior, add
+        # a view wrapping range() directly on the catalog, exactly as
+        # schema_builder itself wraps read_parquet() in a view - the
+        # guarded query then only ever sees a plain view name.
+        commands.list_datasets(
+            tmp_path,
+            release=release,
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+        conn = catalog.connect_catalog(tmp_path)
+        try:
+            conn.execute(view_sql)
+        finally:
+            conn.close()
+
     def test_row_cap_truncates_large_result(self, tmp_path, fixture_release_layout):
-        base_uri, _release, _dataset_rows = fixture_release_layout
+        base_uri, release, _dataset_rows = fixture_release_layout
+        self._build_schema_and_add_view(
+            tmp_path,
+            base_uri,
+            release,
+            f'CREATE VIEW "{release}".big AS SELECT * FROM range(2500) AS t(n)',
+        )
 
         result = commands.run_sql(
             tmp_path,
-            "SELECT * FROM range(2500) AS t(n)",
+            "SELECT * FROM big",
             fetch_xml=self._fetch_xml(),
             fetch_croissant=self._fetch_croissant(),
             base_uri=base_uri,
@@ -466,11 +561,24 @@ class TestRunSql:
         assert result["data"]["truncated"] is True
 
     def test_slow_query_times_out(self, tmp_path, fixture_release_layout):
-        base_uri, _release, _dataset_rows = fixture_release_layout
+        base_uri, release, _dataset_rows = fixture_release_layout
+        self._build_schema_and_add_view(
+            tmp_path,
+            base_uri,
+            release,
+            f'CREATE VIEW "{release}".slow_a AS SELECT * FROM range(100000000)',
+        )
+        conn = catalog.connect_catalog(tmp_path)
+        try:
+            conn.execute(
+                f'CREATE VIEW "{release}".slow_b AS SELECT * FROM range(100000)'
+            )
+        finally:
+            conn.close()
 
         result = commands.run_sql(
             tmp_path,
-            "SELECT count(*) FROM range(100000000) a, range(100000) b",
+            "SELECT count(*) FROM slow_a a, slow_b b",
             fetch_xml=self._fetch_xml(),
             fetch_croissant=self._fetch_croissant(),
             base_uri=base_uri,
@@ -633,9 +741,30 @@ class TestRunSql:
     ):
         base_uri, _latest, other, _rows = fixture_two_release_layout
 
+        # Trigger lazy-init of `other`'s schema first (same qualifier-based
+        # mechanism as test_query_joining_two_explicitly_qualified_releases_executes),
+        # then add a view wrapping range() directly - range() itself is no
+        # longer allowed as a guarded query's data source (see sql_guard's
+        # table-function allowlist).
+        commands.run_sql(
+            tmp_path,
+            f'SELECT * FROM "{other}".target LIMIT 1',
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+        conn = catalog.connect_catalog(tmp_path)
+        try:
+            conn.execute(
+                f'CREATE VIEW "{other}".big AS SELECT * FROM range(2500) AS t(n)'
+            )
+        finally:
+            conn.close()
+
         result = commands.run_sql(
             tmp_path,
-            f'SELECT * FROM "{other}".target CROSS JOIN range(2500) AS t(n)',
+            f'SELECT * FROM "{other}".target CROSS JOIN "{other}".big',
             fetch_xml=self._fetch_xml(),
             fetch_croissant=self._fetch_croissant(),
             base_uri=base_uri,
