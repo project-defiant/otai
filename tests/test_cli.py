@@ -65,13 +65,17 @@ def test_list_releases_has_no_release_flag(tmp_path):
     assert result.exit_code != 0
 
 
-def test_list_releases_creates_catalog_file_on_first_run(tmp_path):
+def test_list_releases_does_not_create_catalog_file(tmp_path):
+    # list-releases never builds a schema, so it must never take the
+    # catalog's write lock - it should simply report nothing cached rather
+    # than unconditionally creating the file.
     cache_dir = tmp_path / "cache"
     assert not (cache_dir / "catalog.duckdb").exists()
 
-    _invoke(["list-releases"], cache_dir)
+    result = _invoke(["list-releases"], cache_dir)
 
-    assert (cache_dir / "catalog.duckdb").exists()
+    assert result.exit_code == 0
+    assert not (cache_dir / "catalog.duckdb").exists()
 
 
 def test_unknown_format_is_rejected(tmp_path):
