@@ -96,6 +96,13 @@ def _is_fresh(cache: dict, now: datetime) -> bool:
         return False
     if not isinstance(release_names, list) or not isinstance(latest, str):
         return False
+    # now/resolved_at may each be naive or aware (get_releases accepts a
+    # caller-supplied `now` without enforcing tzinfo) - normalize both to
+    # UTC before subtracting, otherwise mixing the two raises TypeError.
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    if resolved_at.tzinfo is None:
+        resolved_at = resolved_at.replace(tzinfo=timezone.utc)
     age_seconds = (now - resolved_at).total_seconds()
     return 0 <= age_seconds < CACHE_TTL_SECONDS
 
