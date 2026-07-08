@@ -20,7 +20,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-ENV_VAR = "OTAI_CACHE_DIR"
+CACHE_DIR_ENV_VAR = "OTAI_CACHE_DIR"
 BASE_URI_ENV_VAR = "OTAI_BASE_URI"
 DEFAULT_BASE_URI = "s3://open-targets-public-data-releases/platform"
 LOG_LEVEL_ENV_VAR = "OTAI_LOG_LEVEL"
@@ -33,7 +33,7 @@ def default_cache_dir() -> Path:
 
 def get_cache_dir() -> Path:
     """Resolve the otai cache directory, honoring OTAI_CACHE_DIR if set."""
-    override = os.environ.get(ENV_VAR)
+    override = os.environ.get(CACHE_DIR_ENV_VAR)
     if override:
         return Path(override)
     return default_cache_dir()

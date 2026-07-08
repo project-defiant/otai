@@ -61,6 +61,32 @@ def _load_datasets(
         )
 
 
+def _resolve_release_and_datasets(
+    cache_dir: Path,
+    release: str | None,
+    fetch_xml,
+    fetch_croissant,
+    now: datetime | None,
+) -> tuple[str | None, list[croissant_mod.DatasetInfo] | None, dict[str, Any] | None]:
+    """Resolve `release` to `latest` if needed, then load its croissant datasets.
+
+    Returns `(release, datasets, None)` on success, or `(None, None, error)`
+    on failure. Shared by `list_datasets`/`describe_dataset`, which both
+    start this way before diverging (schema building vs. field lookup).
+    """
+    release, error = _resolve_release(cache_dir, release, fetch_xml, now)
+    if error is not None:
+        return None, None, error
+    release = cast(str, release)
+
+    datasets, error = _load_datasets(cache_dir, release, fetch_croissant)
+    if error is not None:
+        return None, None, error
+    datasets = cast(list[croissant_mod.DatasetInfo], datasets)
+
+    return release, datasets, None
+
+
 def _ensure_release_schema(
     conn, release: str, datasets: list[croissant_mod.DatasetInfo], base_uri: str
 ) -> None:
@@ -136,14 +162,12 @@ def list_datasets(
     PRD §5) and its DuckDB schema/views exist (built lazily on first use -
     PRD §6), then returns each dataset's name and one-line description.
     """
-    release, error = _resolve_release(cache_dir, release, fetch_xml, now)
+    release, datasets, error = _resolve_release_and_datasets(
+        cache_dir, release, fetch_xml, fetch_croissant, now
+    )
     if error is not None:
         return error
     release = cast(str, release)
-
-    datasets, error = _load_datasets(cache_dir, release, fetch_croissant)
-    if error is not None:
-        return error
     datasets = cast(list[croissant_mod.DatasetInfo], datasets)
 
     # Dataset names/descriptions come from croissant, not DuckDB - the
@@ -184,14 +208,12 @@ def describe_dataset(
     cross-dataset `references`, and nested `subFields` (PRD §5/§7). Does
     not touch the DuckDB catalog: this command has no need for the views.
     """
-    release, error = _resolve_release(cache_dir, release, fetch_xml, now)
+    release, datasets, error = _resolve_release_and_datasets(
+        cache_dir, release, fetch_xml, fetch_croissant, now
+    )
     if error is not None:
         return error
     release = cast(str, release)
-
-    datasets, error = _load_datasets(cache_dir, release, fetch_croissant)
-    if error is not None:
-        return error
     datasets = cast(list[croissant_mod.DatasetInfo], datasets)
 
     dataset = next((d for d in datasets if d.name == name), None)
@@ -222,7 +244,7 @@ def run_sql(
     timeout_seconds: float = sql_guard.DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Implements `otai run-sql "<query>"`: guarded read-only SQL, latest by
-    default with explicit cross-release support (PRD §6/§7, issue #5).
+    default with explicit cross-release support (PRD §6/§7).
 
     Unlike list_datasets/describe_dataset, there is no `--release` flag
     (PRD §7): this always resolves `latest`, ensures its croissant is
@@ -235,7 +257,7 @@ def run_sql(
     resolution (PRD §10).
 
     Schema-qualified references to *other* releases (e.g. "26.03".target)
-    are resolved explicitly (issue #5): the query is parsed with
+    are resolved explicitly: the query is parsed with
     `sql_guard.extract_schema_qualifiers` to find every schema qualifier
     used, each is checked against the full set of known releases (PRD §6
     step 2 / §7 guardrail #2) - an unrecognized qualifier fails fast with

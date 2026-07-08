@@ -8,20 +8,14 @@ with the parquet file glob backing it (`fileSet`, via `distribution`).
 
 Unlike the "latest release" cache (24h TTL, see releases.py), a release's
 croissant.json is immutable once published: it is cached locally forever
-and never re-fetched once a *valid* cache exists (PRD §5). A corrupt or
-unreadable cache (e.g. from an interrupted write) is treated as a cache
-miss and silently refetched, same as releases.py already does for its own
-cache - the write itself is atomic (temp file + rename) so an interruption
-mid-write can't leave a corrupt file in the first place, but this also
-covers a cache corrupted by any other means (disk error, manual edit).
+and never re-fetched once a *valid* cache exists (PRD §5). Reading and
+writing the cache file itself (corrupt-cache tolerance, atomic writes) is
+shared with releases.py's cache via `json_cache.py`.
 """
 
 from __future__ import annotations
 
-import contextlib
 import json
-import os
-import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +23,8 @@ from typing import Any
 from urllib.request import urlopen
 
 from loguru import logger
+
+from otai.json_cache import read_json_or_none, write_json_atomic
 
 BUCKET = "open-targets-public-data-releases"
 PREFIX = "platform"
@@ -58,41 +54,6 @@ def _cache_path(cache_dir: Path, release: str) -> Path:
     return Path(cache_dir) / release / CROISSANT_FILENAME
 
 
-def _load_cached_croissant(cache_dir: Path, release: str) -> dict[str, Any] | None:
-    """Return the cached croissant.json for a release, or `None` if absent/corrupt."""
-    path = _cache_path(cache_dir, release)
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
-        logger.warning(
-            f"Cached croissant.json for release {release!r} is corrupt "
-            f"({exc}); refetching"
-        )
-        return None
-
-
-def _save_croissant_cache(cache_dir: Path, release: str, data: dict[str, Any]) -> None:
-    """Write the cache atomically: write to a temp file, then rename over the
-    target. The rename is atomic on POSIX, so a crash/interruption mid-write
-    can never leave a partially-written (corrupt) cache file in its place.
-    """
-    path = _cache_path(cache_dir, release)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{CROISSANT_FILENAME}.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w") as tmp_file:
-            tmp_file.write(json.dumps(data))
-        os.replace(tmp_path, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_path)
-        raise
-
-
 def get_croissant(
     cache_dir: Path,
     release: str,
@@ -105,7 +66,8 @@ def get_croissant(
     TTL cache. A corrupt cache is treated as a miss and refetched (see
     module docstring), rather than permanently failing that release.
     """
-    cached = _load_cached_croissant(cache_dir, release)
+    path = _cache_path(cache_dir, release)
+    cached = read_json_or_none(path)
     if cached is not None:
         logger.debug(f"Using cached croissant.json for release {release!r}")
         return cached
@@ -119,7 +81,7 @@ def get_croissant(
             f"Invalid croissant.json fetched for release {release!r}: {exc}"
         ) from exc
 
-    _save_croissant_cache(cache_dir, release, data)
+    write_json_atomic(path, data)
     return data
 
 
