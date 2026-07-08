@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import urlopen
 
+from loguru import logger
+
 BUCKET = "open-targets-public-data-releases"
 PREFIX = "platform/"
 LIST_URL = f"https://{BUCKET}.s3.amazonaws.com/?list-type=2&prefix={PREFIX}&delimiter=/"
@@ -119,10 +121,13 @@ def get_releases(
     now = now or datetime.now(timezone.utc)
     cache = _load_cache(cache_dir)
     if cache is not None and _is_fresh(cache, now):
+        logger.debug(f"Using cached release list (latest={cache['latest']!r})")
         return cache["releases"], cache["latest"], True
 
+    logger.info("Fetching release list from S3")
     xml_bytes = fetch_xml()
     release_names = parse_release_folders(xml_bytes)
     latest = resolve_latest(release_names)
+    logger.debug(f"Resolved latest release: {latest!r} ({len(release_names)} releases)")
     _save_cache(cache_dir, release_names, latest, now)
     return release_names, latest, False
