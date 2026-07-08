@@ -119,6 +119,85 @@ def test_list_datasets_accepts_explicit_release(tmp_path, fixture_release_layout
     assert payload["data"]["release"] == release
 
 
+def test_describe_dataset_json_output_defaults_to_latest(tmp_path, fixture_release_layout):
+    base_uri, release, _dataset_rows = fixture_release_layout
+
+    result = _invoke_with_fixtures(
+        ["describe-dataset", "target"], tmp_path / "cache", base_uri
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["data"]["release"] == release
+    assert payload["data"]["dataset"] == "target"
+    fields_by_name = {f["name"]: f for f in payload["data"]["fields"]}
+    assert fields_by_name["id"]["dataType"] == "sc:Text"
+
+
+def test_describe_dataset_includes_references_and_subfields(tmp_path, fixture_release_layout):
+    base_uri, _release, _dataset_rows = fixture_release_layout
+
+    result = _invoke_with_fixtures(
+        ["describe-dataset", "association_by_datasource_direct"],
+        tmp_path / "cache",
+        base_uri,
+    )
+
+    payload = json.loads(result.stdout)
+    fields_by_name = {f["name"]: f for f in payload["data"]["fields"]}
+    assert fields_by_name["targetId"]["references"] == {
+        "dataset": "target",
+        "field": "id",
+    }
+
+    result = _invoke_with_fixtures(
+        ["describe-dataset", "target"], tmp_path / "cache", base_uri
+    )
+    payload = json.loads(result.stdout)
+    fields_by_name = {f["name"]: f for f in payload["data"]["fields"]}
+    sub_by_name = {sf["name"]: sf for sf in fields_by_name["proteinIds"]["subFields"]}
+    assert set(sub_by_name) == {"id", "source"}
+
+
+def test_describe_dataset_table_format(tmp_path, fixture_release_layout):
+    base_uri, _release, _dataset_rows = fixture_release_layout
+
+    result = _invoke_with_fixtures(
+        ["describe-dataset", "target", "--format", "table"], tmp_path / "cache", base_uri
+    )
+
+    assert result.exit_code == 0
+    assert "name" in result.stdout
+    assert "dataType" in result.stdout
+    assert "id" in result.stdout
+
+
+def test_describe_dataset_accepts_explicit_release(tmp_path, fixture_release_layout):
+    base_uri, release, _dataset_rows = fixture_release_layout
+
+    result = _invoke_with_fixtures(
+        ["describe-dataset", "target", "--release", release], tmp_path / "cache", base_uri
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["release"] == release
+
+
+def test_describe_dataset_unknown_dataset_returns_error(tmp_path, fixture_release_layout):
+    base_uri, _release, _dataset_rows = fixture_release_layout
+
+    result = _invoke_with_fixtures(
+        ["describe-dataset", "no_such_dataset"], tmp_path / "cache", base_uri
+    )
+
+    assert result.exit_code != 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "dataset_not_found"
+
+
 def test_list_datasets_builds_catalog_schema_on_first_run(tmp_path, fixture_release_layout):
     base_uri, release, _dataset_rows = fixture_release_layout
     cache_dir = tmp_path / "cache"

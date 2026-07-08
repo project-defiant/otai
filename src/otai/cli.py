@@ -110,6 +110,41 @@ def list_datasets_cmd(
         typer.echo(json.dumps(result))
 
 
+@app.command("describe-dataset")
+def describe_dataset_cmd(
+    name: str = typer.Argument(..., help="Dataset (recordSet) name to describe."),
+    release: str = typer.Option(
+        None,
+        "--release",
+        help="Release to describe the dataset for (default: latest).",
+    ),
+    format: str = typer.Option(
+        "json",
+        "--format",
+        callback=_validate_format,
+        help="Output format: json (default) or table.",
+    ),
+) -> None:
+    """Describe one dataset's fields: names, types, descriptions, relationships."""
+    cache_dir = config.get_cache_dir()
+    # Same reasoning as list_datasets_cmd above: look up both fetch
+    # functions fresh on every call so test patches are honored.
+    result = commands.describe_dataset(
+        cache_dir,
+        name,
+        release=release,
+        fetch_xml=releases_mod.default_fetch_listing_xml,
+        fetch_croissant=croissant.default_fetch_croissant,
+    )
+
+    if not result["ok"]:
+        _emit_error(result, format)
+    elif format == "table":
+        typer.echo(formatting.render_table(result["data"]["fields"]))
+    else:
+        typer.echo(json.dumps(result))
+
+
 def main() -> None:
     app()
 
