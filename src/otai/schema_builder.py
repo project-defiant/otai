@@ -13,7 +13,11 @@ fixtures rather than mocking DuckDB itself (PRD §10).
 
 from __future__ import annotations
 
+import sys
+
 import duckdb
+from loguru import logger
+from tqdm import tqdm
 
 from otai.config import DEFAULT_BASE_URI
 from otai.croissant import DatasetInfo
@@ -52,12 +56,25 @@ def build_release_schema(
     back the `CREATE SCHEMA` too, instead of leaving a partially-built
     schema that `list_cached_schemas` would then mistake for "already
     initialized" on the next call.
+
+    Each `CREATE VIEW` resolves its dataset's glob against real S3 (or a
+    local fixture in tests), so building a full release can take a while
+    (measured ~18s for a 55-dataset release) - a tqdm progress bar (stderr,
+    never stdout - stdout is reserved for the JSON envelope) gives visible
+    feedback for that wait.
     """
     _ensure_httpfs(conn, base_uri)
+    logger.info(f"Building schema for release {release!r} ({len(datasets)} datasets)")
     conn.execute("BEGIN TRANSACTION")
     try:
         conn.execute(f'CREATE SCHEMA "{release}"')
-        for dataset in datasets:
+        progress = tqdm(
+            datasets,
+            desc=f'Building "{release}"',
+            unit="dataset",
+            file=sys.stderr,
+        )
+        for dataset in progress:
             glob_url = f"{base_uri}/{release}/output/{dataset.file_glob}"
             # release/dataset names come from trusted S3/croissant data, not
             # user input; DuckDB has no parameterized-identifier syntax to
@@ -67,8 +84,11 @@ def build_release_schema(
                 f"SELECT * FROM read_parquet('{glob_url}')"
             )
             conn.execute(create_view_sql)
+            logger.debug(f'Created view "{release}"."{dataset.name}"')
     except Exception:
         conn.execute("ROLLBACK")
+        logger.exception(f"Failed to build schema for release {release!r}; rolled back")
         raise
     else:
         conn.execute("COMMIT")
+        logger.success(f"Built schema for release {release!r}")
