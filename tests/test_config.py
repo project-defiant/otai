@@ -11,3 +11,13 @@ def test_default_cache_dir_is_under_user_home_cache(monkeypatch):
 def test_cache_dir_overridable_via_env_var(monkeypatch, tmp_path):
     monkeypatch.setenv("OTAI_CACHE_DIR", str(tmp_path / "custom-cache"))
     assert config.get_cache_dir() == tmp_path / "custom-cache"
+
+
+def test_default_base_uri_is_the_public_s3_bucket(monkeypatch):
+    monkeypatch.delenv("OTAI_BASE_URI", raising=False)
+    assert config.get_base_uri() == "s3://open-targets-public-data-releases/platform"
+
+
+def test_base_uri_overridable_via_env_var(monkeypatch):
+    monkeypatch.setenv("OTAI_BASE_URI", "file:///tmp/fixtures")
+    assert config.get_base_uri() == "file:///tmp/fixtures"
