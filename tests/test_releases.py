@@ -83,7 +83,7 @@ class TestGetReleases:
         releases.get_releases(tmp_path, fetch_xml=fetch, now=now)
 
         much_later = now + timedelta(hours=25)
-        result_releases, latest, from_cache = releases.get_releases(
+        _result_releases, _latest, from_cache = releases.get_releases(
             tmp_path, fetch_xml=fetch, now=much_later
         )
 
@@ -107,7 +107,7 @@ class TestGetReleases:
         (tmp_path / releases.CACHE_FILENAME).write_text("not json")
         fetch = Mock(return_value=SAMPLE_LISTING_XML)
 
-        result_releases, latest, from_cache = releases.get_releases(
+        _result_releases, latest, from_cache = releases.get_releases(
             tmp_path, fetch_xml=fetch, now=datetime(2026, 7, 8, tzinfo=timezone.utc)
         )
 

@@ -68,7 +68,7 @@ _DISALLOWED_NODE_TYPES: tuple[type[exp.Expression], ...] = (
 )
 
 
-class GuardrailViolation(Exception):
+class GuardrailViolationError(Exception):
     """Raised when a query fails the read-only guardrail check."""
 
 
@@ -76,7 +76,7 @@ class SqlError(Exception):
     """Raised for malformed SQL - parse failure or execution error."""
 
 
-class QueryTimeout(Exception):
+class QueryTimeoutError(Exception):
     """Raised when a query exceeds the wall-clock execution timeout."""
 
 
@@ -95,7 +95,7 @@ def _parse_statements(sql: str) -> list[exp.Expression]:
 def validate_read_only(sql: str) -> None:
     """Reject anything that is not a single read-only SELECT/WITH statement.
 
-    Raises `SqlError` if `sql` fails to parse at all, or `GuardrailViolation`
+    Raises `SqlError` if `sql` fails to parse at all, or `GuardrailViolationError`
     if it parses but is not a single read-only query (including mutating
     statements nested inside a CTE or subquery - see module docstring).
     """
@@ -105,21 +105,21 @@ def validate_read_only(sql: str) -> None:
         raise SqlError(f"Failed to parse SQL: {exc}") from exc
 
     if len(statements) != 1:
-        raise GuardrailViolation(
+        raise GuardrailViolationError(
             "Only a single SELECT/WITH statement is allowed per run-sql call "
             f"(found {len(statements)})."
         )
 
     statement = statements[0]
     if not isinstance(statement, exp.Query):
-        raise GuardrailViolation(
+        raise GuardrailViolationError(
             "Only read-only SELECT/WITH statements are allowed; got a "
             f"{type(statement).__name__} statement."
         )
 
     for node in statement.walk():
         if isinstance(node, _DISALLOWED_NODE_TYPES):
-            raise GuardrailViolation(
+            raise GuardrailViolationError(
                 "Query contains a disallowed statement or expression "
                 f"({type(node).__name__}); only read-only SELECT/WITH "
                 "queries are permitted, including inside CTEs and "
@@ -137,7 +137,7 @@ def extract_schema_qualifiers(sql: str) -> list[str]:
     from issue #4.
 
     Deliberately lenient: diagnosing malformed or multi-statement SQL is
-    `validate_read_only`'s job (it raises `SqlError`/`GuardrailViolation`
+    `validate_read_only`'s job (it raises `SqlError`/`GuardrailViolationError`
     with the right error type). This function instead returns an empty list
     whenever `sql` can't be parsed into exactly one statement, so
     `commands.run_sql` can call it unconditionally before the real guardrail
@@ -195,7 +195,7 @@ def _execute_with_timeout(
     if worker.is_alive():
         conn.interrupt()
         worker.join(max(timeout_seconds, 5.0))
-        raise QueryTimeout(
+        raise QueryTimeoutError(
             f"Query exceeded the {timeout_seconds:g}s timeout and was cancelled."
         )
 
@@ -220,7 +220,7 @@ def run_guarded_query(
     """
     try:
         validate_read_only(sql)
-    except GuardrailViolation as exc:
+    except GuardrailViolationError as exc:
         return envelope.failure("guardrail_violation", str(exc))
     except SqlError as exc:
         return envelope.failure("sql_error", str(exc))
@@ -229,7 +229,7 @@ def run_guarded_query(
         columns, rows = _execute_with_timeout(
             conn, sql, timeout_seconds, fetch_limit=row_cap + 1
         )
-    except QueryTimeout as exc:
+    except QueryTimeoutError as exc:
         return envelope.failure("timeout", str(exc))
     except SqlError as exc:
         return envelope.failure("sql_error", str(exc))
