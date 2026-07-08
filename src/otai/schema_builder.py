@@ -37,7 +37,10 @@ def build_release_schema(
     conn.execute(f'CREATE SCHEMA "{release}"')
     for dataset in datasets:
         glob_url = f"{base_uri}/{release}/output/{dataset.file_glob}"
-        conn.execute(
-            f'CREATE VIEW "{release}"."{dataset.name}" AS '
+        # release/dataset names come from trusted S3/croissant data, not user
+        # input; DuckDB has no parameterized-identifier syntax to use instead.
+        create_view_sql = (
+            f'CREATE VIEW "{release}"."{dataset.name}" AS '  # noqa: S608
             f"SELECT * FROM read_parquet('{glob_url}')"
         )
+        conn.execute(create_view_sql)

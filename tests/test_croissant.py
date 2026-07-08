@@ -242,8 +242,7 @@ class TestParseDatasetFields:
         assert fields_by_name["id"].description == "Ensembl gene identifier."
         assert fields_by_name["id"].data_type == "sc:Text"
         assert (
-            fields_by_name["approvedSymbol"].description
-            == "HGNC-approved gene symbol."
+            fields_by_name["approvedSymbol"].description == "HGNC-approved gene symbol."
         )
 
     def test_field_without_references_or_subfields_has_empty_defaults(self):
@@ -257,7 +256,9 @@ class TestParseDatasetFields:
     def test_parses_cross_dataset_reference(self):
         datasets = croissant.parse_datasets(CROISSANT_FIXTURE)
         by_name = {d.name: d for d in datasets}
-        assoc_fields = {f.name: f for f in by_name["association_by_datasource_direct"].fields}
+        assoc_fields = {
+            f.name: f for f in by_name["association_by_datasource_direct"].fields
+        }
 
         target_id_ref = assoc_fields["targetId"].references
         assert target_id_ref is not None

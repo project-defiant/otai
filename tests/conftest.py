@@ -102,5 +102,8 @@ def fixture_two_release_layout(tmp_path):
         base_uri,
         FIXTURE_RELEASE,
         OTHER_FIXTURE_RELEASE,
-        {FIXTURE_RELEASE: FIXTURE_DATASET_ROWS, OTHER_FIXTURE_RELEASE: OTHER_FIXTURE_DATASET_ROWS},
+        {
+            FIXTURE_RELEASE: FIXTURE_DATASET_ROWS,
+            OTHER_FIXTURE_RELEASE: OTHER_FIXTURE_DATASET_ROWS,
+        },
     )

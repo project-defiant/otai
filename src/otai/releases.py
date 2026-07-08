@@ -19,9 +19,7 @@ from urllib.request import urlopen
 
 BUCKET = "open-targets-public-data-releases"
 PREFIX = "platform/"
-LIST_URL = (
-    f"https://{BUCKET}.s3.amazonaws.com/?list-type=2&prefix={PREFIX}&delimiter=/"
-)
+LIST_URL = f"https://{BUCKET}.s3.amazonaws.com/?list-type=2&prefix={PREFIX}&delimiter=/"
 S3_LISTING_XML_NS = "http://s3.amazonaws.com/doc/2006-03-01/"
 
 CACHE_FILENAME = "latest_release_cache.json"
@@ -44,7 +42,7 @@ def default_fetch_listing_xml(timeout: float = 10.0) -> bytes:
 
 def parse_release_folders(xml_bytes: bytes) -> list[str]:
     """Extract immediate child release folder names from a listing XML payload."""
-    root = ET.fromstring(xml_bytes)
+    root = ET.fromstring(xml_bytes)  # noqa: S314 - trusted public AWS S3 listing response
     ns = {"s3": S3_LISTING_XML_NS}
     releases: list[str] = []
     for prefix_el in root.findall(".//s3:CommonPrefixes/s3:Prefix", ns):
