@@ -226,17 +226,16 @@ def run_sql(
     This is what makes cross-release joins like `"26.06".target JOIN
     "26.03".target` work in a single call with no extra flag.
     """
-    release, error = _resolve_release(cache_dir, None, fetch_xml, now)
-    if error is not None:
-        return error
-    release = cast(str, release)
-
+    # run-sql always targets latest (no --release flag, PRD §7), and always
+    # needs the full release list to validate schema qualifiers below - one
+    # get_releases call covers both, rather than resolving latest via
+    # _resolve_release and then re-fetching the full list separately.
     try:
-        release_names, _latest, _from_cache = releases_mod.get_releases(
+        release_names, release, _from_cache = releases_mod.get_releases(
             cache_dir, fetch_xml=fetch_xml, now=now
         )
     except Exception as exc:  # noqa: BLE001
-        return envelope.failure("s3_error", f"Failed to resolve known releases: {exc}")
+        return envelope.failure("s3_error", f"Failed to resolve releases: {exc}")
 
     qualifiers = sql_guard.extract_schema_qualifiers(query)
     unknown_qualifiers = sorted(set(qualifiers) - set(release_names))

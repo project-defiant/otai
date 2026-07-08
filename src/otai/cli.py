@@ -26,9 +26,10 @@ VALID_FORMATS = ("json", "table")
 def _root() -> None:
     """Open Targets Agentic Query Tool.
 
-    Empty callback so typer keeps treating subcommands (like list-releases)
-    as named subcommands even while only one is registered; more land in
-    later issues (list-datasets, describe-dataset, run-sql).
+    Empty callback so typer keeps treating subcommands (list-releases,
+    list-datasets, describe-dataset, run-sql) as named subcommands - a
+    Typer app with only a single registered command otherwise collapses
+    to a single top-level command instead of a named subcommand.
     """
 
 
@@ -77,7 +78,7 @@ def list_releases_cmd(
 
 @app.command("list-datasets")
 def list_datasets_cmd(
-    release: str = typer.Option(
+    release: str | None = typer.Option(
         None,
         "--release",
         help="Release to list datasets for (default: latest).",
@@ -113,7 +114,7 @@ def list_datasets_cmd(
 @app.command("describe-dataset")
 def describe_dataset_cmd(
     name: str = typer.Argument(..., help="Dataset (recordSet) name to describe."),
-    release: str = typer.Option(
+    release: str | None = typer.Option(
         None,
         "--release",
         help="Release to describe the dataset for (default: latest).",
