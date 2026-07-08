@@ -69,6 +69,24 @@ def _ensure_release_schema(
         schema_builder.build_release_schema(conn, release, datasets, base_uri)
 
 
+def _cached_schemas_readonly(cache_dir: Path) -> set[str]:
+    """Peek at which release schemas already exist, without the write lock.
+
+    Returns an empty set if the catalog doesn't exist yet or a concurrent
+    writer currently holds it - callers use this purely to decide whether
+    they can avoid `connect_catalog` (read-write) entirely; under-reporting
+    here just means "check for real", not lost information, since building
+    always re-checks via `_ensure_release_schema` on the write connection.
+    """
+    conn = catalog.try_connect_readonly(cache_dir)
+    if conn is None:
+        return set()
+    try:
+        return set(catalog.list_cached_schemas(conn))
+    finally:
+        conn.close()
+
+
 def list_releases(
     cache_dir: Path,
     fetch_xml=releases_mod.default_fetch_listing_xml,
@@ -82,17 +100,15 @@ def list_releases(
     except Exception as exc:  # noqa: BLE001 - surfaced as a structured envelope
         return envelope.failure("s3_error", f"Failed to list releases from S3: {exc}")
 
-    conn = None
+    # list-releases never builds anything, so it never needs the catalog's
+    # write lock - a read-only peek (or an empty set if nothing is built
+    # yet) is all "cached" needs (see catalog.py's concurrency note).
     try:
-        conn = catalog.connect_catalog(cache_dir)
-        cached_schemas = set(catalog.list_cached_schemas(conn))
+        cached_schemas = _cached_schemas_readonly(cache_dir)
     except Exception as exc:  # noqa: BLE001
         return envelope.failure(
-            "catalog_error", f"Failed to open local DuckDB catalog: {exc}"
+            "catalog_error", f"Failed to read local DuckDB catalog: {exc}"
         )
-    finally:
-        if conn is not None:
-            conn.close()
 
     rows = [
         {
@@ -130,18 +146,23 @@ def list_datasets(
         return error
     datasets = cast(list[croissant_mod.DatasetInfo], datasets)
 
-    conn = None
-    try:
-        conn = catalog.connect_catalog(cache_dir)
-        _ensure_release_schema(conn, release, datasets, base_uri)
-    except Exception as exc:  # noqa: BLE001
-        return envelope.failure(
-            "catalog_error",
-            f"Failed to build schema for release {release!r}: {exc}",
-        )
-    finally:
-        if conn is not None:
-            conn.close()
+    # Dataset names/descriptions come from croissant, not DuckDB - the
+    # catalog is only touched to lazily build the schema, and only if a
+    # read-only peek shows it isn't already there (avoids the write lock
+    # entirely on the common "already cached" path).
+    if release not in _cached_schemas_readonly(cache_dir):
+        conn = None
+        try:
+            conn = catalog.connect_catalog(cache_dir)
+            _ensure_release_schema(conn, release, datasets, base_uri)
+        except Exception as exc:  # noqa: BLE001
+            return envelope.failure(
+                "catalog_error",
+                f"Failed to build schema for release {release!r}: {exc}",
+            )
+        finally:
+            if conn is not None:
+                conn.close()
 
     rows = [{"dataset": d.name, "description": d.description} for d in datasets]
     return envelope.success({"release": release, "datasets": rows})
@@ -245,27 +266,40 @@ def run_sql(
             "Query references unknown release(s): " + ", ".join(unknown_qualifiers),
         )
 
-    datasets, error = _load_datasets(cache_dir, release, fetch_croissant)
-    if error is not None:
-        return error
-    datasets = cast(list[croissant_mod.DatasetInfo], datasets)
-
     extra_releases = sorted(set(qualifiers) - {release})
+    needed_releases = [release, *extra_releases]
+    missing_releases = [
+        r for r in needed_releases if r not in _cached_schemas_readonly(cache_dir)
+    ]
 
     conn = None
     try:
-        conn = catalog.connect_catalog(cache_dir)
-        _ensure_release_schema(conn, release, datasets, base_uri)
-
-        for extra_release in extra_releases:
-            extra_datasets, extra_error = _load_datasets(
-                cache_dir, extra_release, fetch_croissant
+        if missing_releases:
+            # At least one release needs building - take the (retrying)
+            # write connection once and build everything missing on it.
+            conn = catalog.connect_catalog(cache_dir)
+            for missing_release in missing_releases:
+                missing_datasets, build_error = _load_datasets(
+                    cache_dir, missing_release, fetch_croissant
+                )
+                if build_error is not None:
+                    conn.close()
+                    return build_error
+                missing_datasets = cast(
+                    list[croissant_mod.DatasetInfo], missing_datasets
+                )
+                _ensure_release_schema(
+                    conn, missing_release, missing_datasets, base_uri
+                )
+        else:
+            # Everything needed is already built: open read-only. This
+            # both avoids taking the write lock (no contention with other
+            # concurrent otai calls) and is a second, engine-level
+            # enforcement of "run-sql never mutates", independent of
+            # sql_guard's own AST-based read-only check.
+            conn = catalog.try_connect_readonly(cache_dir) or catalog.connect_catalog(
+                cache_dir
             )
-            if extra_error is not None:
-                conn.close()
-                return extra_error
-            extra_datasets = cast(list[croissant_mod.DatasetInfo], extra_datasets)
-            _ensure_release_schema(conn, extra_release, extra_datasets, base_uri)
 
         conn.execute("SET search_path = ?", [f'"{release}"'])
     except Exception as exc:  # noqa: BLE001
