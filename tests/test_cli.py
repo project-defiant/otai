@@ -93,7 +93,7 @@ def test_list_datasets_json_output_defaults_to_latest(tmp_path, fixture_release_
 
 
 def test_list_datasets_table_format(tmp_path, fixture_release_layout):
-    base_uri, _release, dataset_rows = fixture_release_layout
+    base_uri, _release, _dataset_rows = fixture_release_layout
 
     result = _invoke_with_fixtures(
         ["list-datasets", "--format", "table"], tmp_path / "cache", base_uri
