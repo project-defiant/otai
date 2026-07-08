@@ -195,7 +195,8 @@ def run_sql(
     row_cap: int = sql_guard.DEFAULT_ROW_CAP,
     timeout_seconds: float = sql_guard.DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    """Implements `otai run-sql "<query>"`: guarded read-only SQL against `latest`.
+    """Implements `otai run-sql "<query>"`: guarded read-only SQL, latest by
+    default with explicit cross-release support (PRD §6/§7, issue #5).
 
     Unlike list_datasets/describe_dataset, there is no `--release` flag
     (PRD §7): this always resolves `latest`, ensures its croissant is
@@ -208,21 +209,60 @@ def run_sql(
     resolution (PRD §10).
 
     Schema-qualified references to *other* releases (e.g. "26.03".target)
-    are out of scope here (issue #5): they simply fail naturally as a
-    DuckDB "schema not found" error, surfaced below as `sql_error`.
+    are resolved explicitly (issue #5): the query is parsed with
+    `sql_guard.extract_schema_qualifiers` to find every schema qualifier
+    used, each is checked against the full set of known releases (PRD §6
+    step 2 / §7 guardrail #2) - an unrecognized qualifier fails fast with
+    `release_not_found` before anything is built or executed - and each
+    valid qualifier's release schema is lazy-init'd (croissant fetch +
+    `CREATE SCHEMA`/views) alongside `latest`, using the same
+    `_load_datasets`/`_ensure_release_schema` helpers `list_datasets` uses,
+    just called directly since the release string is already known here.
+    This is what makes cross-release joins like `"26.06".target JOIN
+    "26.03".target` work in a single call with no extra flag.
     """
     release, error = _resolve_release(cache_dir, None, fetch_xml, now)
     if error is not None:
         return error
 
+    try:
+        release_names, _latest, _from_cache = releases_mod.get_releases(
+            cache_dir, fetch_xml=fetch_xml, now=now
+        )
+    except Exception as exc:  # noqa: BLE001
+        return envelope.failure(
+            "s3_error", f"Failed to resolve known releases: {exc}"
+        )
+
+    qualifiers = sql_guard.extract_schema_qualifiers(query)
+    unknown_qualifiers = sorted(set(qualifiers) - set(release_names))
+    if unknown_qualifiers:
+        return envelope.failure(
+            "release_not_found",
+            "Query references unknown release(s): "
+            + ", ".join(unknown_qualifiers),
+        )
+
     datasets, error = _load_datasets(cache_dir, release, fetch_croissant)
     if error is not None:
         return error
+
+    extra_releases = sorted(set(qualifiers) - {release})
 
     conn = None
     try:
         conn = catalog.connect_catalog(cache_dir)
         _ensure_release_schema(conn, release, datasets, base_uri)
+
+        for extra_release in extra_releases:
+            extra_datasets, extra_error = _load_datasets(
+                cache_dir, extra_release, fetch_croissant
+            )
+            if extra_error is not None:
+                conn.close()
+                return extra_error
+            _ensure_release_schema(conn, extra_release, extra_datasets, base_uri)
+
         conn.execute("SET search_path = ?", [f'"{release}"'])
     except Exception as exc:  # noqa: BLE001
         if conn is not None:

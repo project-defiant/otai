@@ -80,6 +80,18 @@ class QueryTimeout(Exception):
     """Raised when a query exceeds the wall-clock execution timeout."""
 
 
+def _parse_statements(sql: str) -> list[exp.Expression]:
+    """Parse `sql` (DuckDB dialect) into its top-level statement list.
+
+    Shared by `validate_read_only` and `extract_schema_qualifiers` so both
+    walk the same parse of the query rather than duplicating the
+    `sqlglot.parse` invocation's dialect/None-filtering details. Raises
+    `sqlglot.errors.ParseError` on malformed SQL - callers decide how to
+    react (raise `SqlError`, or swallow it, per their own contract).
+    """
+    return [s for s in sqlglot.parse(sql, read=DIALECT) if s is not None]
+
+
 def validate_read_only(sql: str) -> None:
     """Reject anything that is not a single read-only SELECT/WITH statement.
 
@@ -88,7 +100,7 @@ def validate_read_only(sql: str) -> None:
     statements nested inside a CTE or subquery - see module docstring).
     """
     try:
-        statements = [s for s in sqlglot.parse(sql, read=DIALECT) if s is not None]
+        statements = _parse_statements(sql)
     except sqlglot.errors.ParseError as exc:
         raise SqlError(f"Failed to parse SQL: {exc}") from exc
 
@@ -113,6 +125,40 @@ def validate_read_only(sql: str) -> None:
                 "queries are permitted, including inside CTEs and "
                 "subqueries."
             )
+
+
+def extract_schema_qualifiers(sql: str) -> list[str]:
+    """Collect every distinct schema/db qualifier used in `sql`'s table refs.
+
+    Walks every `exp.Table` node in the parsed AST (PRD §6/§7, issue #5) and
+    returns the sorted, deduplicated set of schema qualifiers found (e.g.
+    `"26.03".target` -> `"26.03"`). Table references with no qualifier are
+    not included - those resolve via `search_path` to `latest`, unchanged
+    from issue #4.
+
+    Deliberately lenient: diagnosing malformed or multi-statement SQL is
+    `validate_read_only`'s job (it raises `SqlError`/`GuardrailViolation`
+    with the right error type). This function instead returns an empty list
+    whenever `sql` can't be parsed into exactly one statement, so
+    `commands.run_sql` can call it unconditionally before the real guardrail
+    check without duplicating that error handling. It also does not care
+    whether the statement is read-only - a schema-qualified table inside a
+    rejected DDL/DML statement still gets extracted, since the guardrail
+    check (not this function) is what ultimately rejects the query.
+    """
+    try:
+        statements = _parse_statements(sql)
+    except sqlglot.errors.ParseError:
+        return []
+    if len(statements) != 1:
+        return []
+
+    qualifiers = {
+        node.text("db")
+        for node in statements[0].walk()
+        if isinstance(node, exp.Table) and node.text("db")
+    }
+    return sorted(qualifiers)
 
 
 def _execute_with_timeout(

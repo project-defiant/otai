@@ -494,3 +494,141 @@ class TestRunSql:
 
         assert result["ok"] is False
         assert result["error"]["type"] == "croissant_error"
+
+    def test_schema_qualified_table_triggers_lazy_init_of_that_release(
+        self, tmp_path, fixture_two_release_layout
+    ):
+        base_uri, latest, other, _rows = fixture_two_release_layout
+
+        conn = catalog.connect_catalog(tmp_path)
+        try:
+            assert other not in catalog.list_cached_schemas(conn)
+        finally:
+            conn.close()
+
+        result = commands.run_sql(
+            tmp_path,
+            f'SELECT id, approvedSymbol FROM "{other}".target ORDER BY id',
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is True
+        assert result["data"]["rows"] == [
+            ["ENSG00000141510", "TP53_OLD"],
+            ["ENSG00000157764", "BRAF_OLD"],
+        ]
+
+        conn = catalog.connect_catalog(tmp_path)
+        try:
+            cached = catalog.list_cached_schemas(conn)
+            assert other in cached
+            assert latest in cached
+        finally:
+            conn.close()
+
+    def test_unqualified_names_still_resolve_only_to_latest_alongside_a_qualified_release(
+        self, tmp_path, fixture_two_release_layout
+    ):
+        base_uri, latest, other, _rows = fixture_two_release_layout
+
+        result = commands.run_sql(
+            tmp_path,
+            f'SELECT t.id, t.approvedSymbol, o.approvedSymbol AS old_symbol '
+            f'FROM target t JOIN "{other}".target o ON t.id = o.id ORDER BY t.id',
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is True
+        assert result["data"]["release"] == latest
+        assert result["data"]["rows"] == [
+            ["ENSG00000141510", "TP53", "TP53_OLD"],
+            ["ENSG00000157764", "BRAF", "BRAF_OLD"],
+        ]
+
+    def test_query_joining_two_explicitly_qualified_releases_executes(
+        self, tmp_path, fixture_two_release_layout
+    ):
+        base_uri, latest, other, _rows = fixture_two_release_layout
+
+        result = commands.run_sql(
+            tmp_path,
+            f'SELECT a.id, a.approvedSymbol, b.approvedSymbol '
+            f'FROM "{latest}".target a JOIN "{other}".target b ON a.id = b.id '
+            f"ORDER BY a.id",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is True
+        assert result["data"]["rows"] == [
+            ["ENSG00000141510", "TP53", "TP53_OLD"],
+            ["ENSG00000157764", "BRAF", "BRAF_OLD"],
+        ]
+
+    def test_unknown_schema_qualifier_returns_release_not_found(
+        self, tmp_path, fixture_release_layout
+    ):
+        base_uri, _release, _rows = fixture_release_layout
+
+        result = commands.run_sql(
+            tmp_path,
+            'SELECT * FROM "99.99".target',
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "release_not_found"
+
+        # Nothing should have been built for the bogus qualifier.
+        conn = catalog.connect_catalog(tmp_path)
+        try:
+            assert "99.99" not in catalog.list_cached_schemas(conn)
+        finally:
+            conn.close()
+
+    def test_guardrails_still_apply_to_cross_release_queries(
+        self, tmp_path, fixture_two_release_layout
+    ):
+        base_uri, _latest, other, _rows = fixture_two_release_layout
+
+        result = commands.run_sql(
+            tmp_path,
+            f'DROP TABLE "{other}".target',
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "guardrail_violation"
+
+    def test_row_cap_and_timeout_still_apply_to_cross_release_queries(
+        self, tmp_path, fixture_two_release_layout
+    ):
+        base_uri, _latest, other, _rows = fixture_two_release_layout
+
+        result = commands.run_sql(
+            tmp_path,
+            f'SELECT * FROM "{other}".target CROSS JOIN range(2500) AS t(n)',
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+            row_cap=1000,
+        )
+
+        assert result["ok"] is True
+        assert result["data"]["row_count"] == 1000
+        assert result["data"]["truncated"] is True
