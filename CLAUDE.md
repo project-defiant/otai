@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```sh
 make dev              # uv sync --all-groups + install the prek pre-commit hook
 make lint             # ruff check . && ruff format --check . && ty check
-make test             # pytest (163 tests, fully offline, ~2.5s)
+make test             # pytest (168 tests, fully offline, ~2.5s)
 make clean            # remove .venv, caches, build artifacts
 
 uv run pytest tests/test_sql_guard.py            # single test file
@@ -36,7 +36,8 @@ questions. Full design rationale lives in [PRD.md](PRD.md).
 ### Request flow (the part that spans files)
 
 Every command shares an **implicit init pipeline**, factored into
-`commands.py`'s `_resolve_release` / `_load_datasets` / `_ensure_release_schema`
+`commands.py`'s `_resolve_release` / `_load_datasets` (combined for the
+common case as `_resolve_release_and_datasets`) / `_ensure_release_schema`
 helpers, called in the same sequence by `list_datasets`, `describe_dataset`,
 and `run_sql`:
 
@@ -70,7 +71,9 @@ and `run_sql`:
   above.
 - `releases.py` / `croissant.py` — S3 listing and Croissant parsing. Every
   network-touching function takes an **injectable fetch callable**
-  (defaults to a real `urlopen` call) so tests never hit the network.
+  (defaults to a real `urlopen` call) so tests never hit the network. Both
+  share `json_cache.py` for their on-disk cache file I/O (tolerant reads
+  that treat a corrupt file as a miss, atomic writes via temp-file+rename).
 - `schema_builder.py` — DuckDB schema/view construction; takes an
   injectable `base_uri` (defaults to the real S3 bucket) so tests point it
   at local fixture parquet files via `file://` instead. Shows a `tqdm`

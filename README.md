@@ -7,8 +7,8 @@ a public S3 bucket. No local data materialization, no hosted service —
 phase 1 runs entirely inside a local Claude Code session or a terminal.
 
 See [PRD.md](PRD.md) for the full design (architecture, guardrails, caching,
-testing strategy) and [issues/](issues/) for how phase 1 was broken into
-vertical slices.
+testing strategy) and [issues/](issues/) for the vertical slices phase 1 was
+broken into, plus follow-on issues filed since.
 
 ## How it works
 
@@ -36,8 +36,13 @@ The four commands:
 - `list-datasets [--release X]` — the datasets (tables) available in a release.
 - `describe-dataset <name> [--release X]` — a dataset's columns, types, and relationships.
 - `run-sql "<query>"` — read-only SQL against the views, guarded by `sqlglot`-based
-  validation (rejects anything but a single `SELECT`/`WITH`, including mutations
-  nested in a CTE or subquery), a ~1000-row cap, and a ~45s timeout.
+  validation: rejects anything but a single `SELECT`/`WITH` (including mutations
+  nested in a CTE or subquery) and rejects table-valued functions like
+  `read_csv_auto`/`read_parquet` as a data source (only plain, optionally
+  schema-qualified table/view names are allowed — `run-sql` can only query the
+  release catalog, never arbitrary local/remote files), plus a ~1000-row cap
+  and a ~45s timeout. A proactive `EXPLAIN`-based complexity check is scoped
+  but not yet implemented (see [issues/07](issues/07-query-complexity-guard.md)).
 
 Every command emits a JSON envelope (`{"ok": true, "data": {...}}` /
 `{"ok": false, "error": {"type": "...", "message": "..."}}`) by default, or
