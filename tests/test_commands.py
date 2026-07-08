@@ -185,3 +185,151 @@ class TestListDatasets:
 
         assert result["ok"] is False
         assert result["error"]["type"] == "croissant_error"
+
+
+class TestDescribeDataset:
+    NOW = datetime(2026, 7, 8, tzinfo=timezone.utc)
+
+    def _fetch_xml(self):
+        return Mock(return_value=SAMPLE_LISTING_XML)
+
+    def _fetch_croissant(self):
+        return Mock(return_value=json.dumps(CROISSANT_FIXTURE).encode())
+
+    def test_defaults_to_latest_release_and_returns_fields(self, tmp_path):
+        result = commands.describe_dataset(
+            tmp_path,
+            "target",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            now=self.NOW,
+        )
+
+        assert result["ok"] is True
+        assert result["data"]["release"] == "26.06"
+        assert result["data"]["dataset"] == "target"
+        fields_by_name = {f["name"]: f for f in result["data"]["fields"]}
+        assert fields_by_name["id"]["dataType"] == "sc:Text"
+        assert fields_by_name["id"]["description"] == "Ensembl gene identifier."
+
+    def test_accepts_explicit_single_release(self, tmp_path):
+        fetch_xml = self._fetch_xml()
+
+        result = commands.describe_dataset(
+            tmp_path,
+            "target",
+            release="26.06",
+            fetch_xml=fetch_xml,
+            fetch_croissant=self._fetch_croissant(),
+            now=self.NOW,
+        )
+
+        assert result["ok"] is True
+        assert result["data"]["release"] == "26.06"
+        fetch_xml.assert_not_called()
+
+    def test_includes_cross_dataset_references(self, tmp_path):
+        result = commands.describe_dataset(
+            tmp_path,
+            "association_by_datasource_direct",
+            release="26.06",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            now=self.NOW,
+        )
+
+        fields_by_name = {f["name"]: f for f in result["data"]["fields"]}
+        assert fields_by_name["targetId"]["references"] == {
+            "dataset": "target",
+            "field": "id",
+        }
+        assert fields_by_name["diseaseId"]["references"] == {
+            "dataset": "disease",
+            "field": "id",
+        }
+
+    def test_includes_nested_subfields(self, tmp_path):
+        result = commands.describe_dataset(
+            tmp_path,
+            "target",
+            release="26.06",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            now=self.NOW,
+        )
+
+        fields_by_name = {f["name"]: f for f in result["data"]["fields"]}
+        protein_ids = fields_by_name["proteinIds"]
+        sub_by_name = {sf["name"]: sf for sf in protein_ids["subFields"]}
+        assert set(sub_by_name) == {"id", "source"}
+        assert sub_by_name["id"]["description"] == "External protein identifier."
+
+    def test_field_without_references_has_none(self, tmp_path):
+        result = commands.describe_dataset(
+            tmp_path,
+            "target",
+            release="26.06",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            now=self.NOW,
+        )
+
+        fields_by_name = {f["name"]: f for f in result["data"]["fields"]}
+        assert fields_by_name["id"]["references"] is None
+        assert fields_by_name["id"]["subFields"] == []
+
+    def test_returns_dataset_not_found_for_unknown_dataset(self, tmp_path):
+        result = commands.describe_dataset(
+            tmp_path,
+            "no_such_dataset",
+            release="26.06",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            now=self.NOW,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "dataset_not_found"
+
+    def test_returns_failure_when_latest_resolution_fails(self, tmp_path):
+        fetch_xml = Mock(side_effect=OSError("network unreachable"))
+
+        result = commands.describe_dataset(
+            tmp_path,
+            "target",
+            fetch_xml=fetch_xml,
+            fetch_croissant=self._fetch_croissant(),
+            now=self.NOW,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "s3_error"
+
+    def test_returns_failure_on_croissant_fetch_error(self, tmp_path):
+        fetch_croissant = Mock(side_effect=OSError("network unreachable"))
+
+        result = commands.describe_dataset(
+            tmp_path,
+            "target",
+            release="26.06",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=fetch_croissant,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "croissant_error"
+
+    def test_does_not_touch_duckdb_catalog(self, tmp_path):
+        # describe-dataset reads croissant.json directly and never needs the
+        # DuckDB views (PRD §5/§7) - no catalog.duckdb should be created.
+        commands.describe_dataset(
+            tmp_path,
+            "target",
+            release="26.06",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=self._fetch_croissant(),
+            now=self.NOW,
+        )
+
+        assert not (tmp_path / "catalog.duckdb").exists()

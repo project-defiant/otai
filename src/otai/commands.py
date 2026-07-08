@@ -104,3 +104,57 @@ def list_datasets(
 
     rows = [{"dataset": d.name, "description": d.description} for d in datasets]
     return envelope.success({"release": release, "datasets": rows})
+
+
+def describe_dataset(
+    cache_dir: Path,
+    name: str,
+    release: str | None = None,
+    fetch_xml=releases_mod.default_fetch_listing_xml,
+    fetch_croissant=croissant_mod.default_fetch_croissant,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Implements `otai describe-dataset <name> [--release X]`.
+
+    Resolves `release` to `latest` when omitted (same pattern as
+    list_datasets), then reads the cached croissant.json directly for the
+    named dataset's full field list - names, types, descriptions,
+    cross-dataset `references`, and nested `subFields` (PRD §5/§7). Does
+    not touch the DuckDB catalog: this command has no need for the views.
+    """
+    if release is None:
+        try:
+            _release_names, release, _from_cache = releases_mod.get_releases(
+                cache_dir, fetch_xml=fetch_xml, now=now
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced as a structured envelope
+            return envelope.failure(
+                "s3_error", f"Failed to resolve latest release: {exc}"
+            )
+
+    try:
+        croissant_data = croissant_mod.get_croissant(
+            cache_dir, release, fetch=fetch_croissant
+        )
+        datasets = croissant_mod.parse_datasets(croissant_data)
+    except Exception as exc:  # noqa: BLE001
+        return envelope.failure(
+            "croissant_error",
+            f"Failed to load croissant.json for release {release!r}: {exc}",
+        )
+
+    dataset = next((d for d in datasets if d.name == name), None)
+    if dataset is None:
+        return envelope.failure(
+            "dataset_not_found",
+            f"Dataset {name!r} not found in release {release!r}.",
+        )
+
+    return envelope.success(
+        {
+            "release": release,
+            "dataset": dataset.name,
+            "description": dataset.description,
+            "fields": [field.as_dict() for field in dataset.fields],
+        }
+    )
