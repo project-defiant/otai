@@ -10,10 +10,70 @@ See [PRD.md](PRD.md) for the full design (architecture, guardrails, caching,
 testing strategy) and [issues/](issues/) for how phase 1 was broken into
 vertical slices.
 
+## How it works
+
+```
+Claude Code session
+   └─ Skill (.claude/skills/otai/SKILL.md)
+        └─ invokes: uvx --from <repo-path> otai <subcommand> [args] [--format table]
+             └─ otai CLI (Python, Typer)
+                  └─ DuckDB (httpfs, anonymous S3 access)
+                       └─ s3://open-targets-public-data-releases/platform/<release>/output/*.parquet
+```
+
+`otai` never downloads or materializes Open Targets data locally — every
+query reads live parquet files over S3 through DuckDB's `read_parquet()`.
+The first time a release is touched, `otai` fetches that release's
+[Croissant](http://mlcommons.org/croissant/1.0) schema descriptor, caches
+it forever (release data is immutable), and lazily builds one DuckDB view
+per dataset; a small shared DuckDB file (`~/.cache/otai/catalog.duckdb`)
+tracks which releases have already been built, with one schema namespace
+per release so cross-release joins work in a single query.
+
+The four commands:
+
+- `list-releases` — what releases exist on S3, which is `latest`, which are cached locally.
+- `list-datasets [--release X]` — the datasets (tables) available in a release.
+- `describe-dataset <name> [--release X]` — a dataset's columns, types, and relationships.
+- `run-sql "<query>"` — read-only SQL against the views, guarded by `sqlglot`-based
+  validation (rejects anything but a single `SELECT`/`WITH`, including mutations
+  nested in a CTE or subquery), a ~1000-row cap, and a ~45s timeout.
+
+Every command emits a JSON envelope (`{"ok": true, "data": {...}}` /
+`{"ok": false, "error": {"type": "...", "message": "..."}}`) by default, or
+a human-readable table with `--format table`.
+
 ## Requirements
 
-- [uv](https://docs.astral.sh/uv/)
-- git
+- [uv](https://docs.astral.sh/uv/) — runs the CLI (`uvx`) and manages the
+  Python environment; every other Python dependency, including `duckdb`
+  itself, is declared in `pyproject.toml` and installed automatically the
+  first time you run `uvx`/`uv sync` — there's nothing to install by hand.
+- git — `otai` isn't published to PyPI, so getting the source onto disk
+  means cloning this repo. It's also what `make dev`'s pre-commit hook
+  installs into (`.git/hooks/pre-commit`) and what the
+  [contribution workflow](CONTRIBUTING.md) runs on. Once you have the
+  files, though, running the CLI itself doesn't touch git at all — `uvx
+  --from <path> otai ...` works the same from a plain directory as from a
+  git checkout.
+
+## Setting up with Claude Code
+
+The Skill lives at `.claude/skills/otai/SKILL.md`, checked into this repo,
+and ships and versions together with the CLI. Claude Code auto-discovers
+skills under a project's `.claude/skills/` directory, so:
+
+- **Working directly in this repo**: open it as your Claude Code project
+  (or a parent directory containing it) and the `otai` Skill is available
+  immediately — no extra setup.
+- **Using it from another project**: copy (or symlink)
+  `.claude/skills/otai/` into that project's own `.claude/skills/`
+  directory, and update the `<repo-path>` in the Skill's invocation
+  examples to wherever you cloned `otai`.
+
+Either way, there's no global install: every invocation runs `uvx --from
+<repo-path> otai ...`, so a local code change to `otai` is picked up on
+the very next call, with no reinstall step.
 
 ## Running
 
