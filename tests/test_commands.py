@@ -1,7 +1,10 @@
+import json
 from datetime import datetime, timezone
 from unittest.mock import Mock
 
 from otai import catalog, commands
+
+from test_croissant import CROISSANT_FIXTURE
 
 SAMPLE_LISTING_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
@@ -55,3 +58,130 @@ def test_list_releases_returns_failure_envelope_on_s3_error(tmp_path):
     assert result["ok"] is False
     assert result["error"]["type"] == "s3_error"
     assert "network unreachable" in result["error"]["message"]
+
+
+class TestListDatasets:
+    NOW = datetime(2026, 7, 8, tzinfo=timezone.utc)
+
+    def _fetch_xml(self):
+        return Mock(return_value=SAMPLE_LISTING_XML)
+
+    def _fetch_croissant(self):
+        return Mock(return_value=json.dumps(CROISSANT_FIXTURE).encode())
+
+    def test_defaults_to_latest_release_and_lists_datasets(self, tmp_path, fixture_release_layout):
+        base_uri, release, dataset_rows = fixture_release_layout
+        fetch_croissant = self._fetch_croissant()
+
+        result = commands.list_datasets(
+            tmp_path,
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=fetch_croissant,
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is True
+        assert result["data"]["release"] == "26.06" == release
+        names = {d["dataset"] for d in result["data"]["datasets"]}
+        assert names == set(dataset_rows)
+        by_name = {d["dataset"]: d["description"] for d in result["data"]["datasets"]}
+        assert by_name["target"] == "Target (gene/protein) annotation."
+
+    def test_accepts_explicit_single_release(self, tmp_path, fixture_release_layout):
+        base_uri, release, _dataset_rows = fixture_release_layout
+        fetch_xml = self._fetch_xml()
+
+        result = commands.list_datasets(
+            tmp_path,
+            release=release,
+            fetch_xml=fetch_xml,
+            fetch_croissant=self._fetch_croissant(),
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is True
+        assert result["data"]["release"] == release
+        # An explicit --release must skip latest-resolution entirely.
+        fetch_xml.assert_not_called()
+
+    def test_builds_release_schema_lazily_and_reuses_it(self, tmp_path, fixture_release_layout):
+        base_uri, release, dataset_rows = fixture_release_layout
+        fetch_croissant = self._fetch_croissant()
+
+        commands.list_datasets(
+            tmp_path,
+            release=release,
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=fetch_croissant,
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+        conn = catalog.connect_catalog(tmp_path)
+        try:
+            assert release in catalog.list_cached_schemas(conn)
+        finally:
+            conn.close()
+
+        # Second call must not attempt to recreate the schema (which would
+        # raise "already exists") - it should just reuse it.
+        second = commands.list_datasets(
+            tmp_path,
+            release=release,
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=fetch_croissant,
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+        assert second["ok"] is True
+        assert {d["dataset"] for d in second["data"]["datasets"]} == set(dataset_rows)
+
+    def test_croissant_fetched_once_then_cached_across_calls(self, tmp_path, fixture_release_layout):
+        base_uri, release, _dataset_rows = fixture_release_layout
+        fetch_croissant = self._fetch_croissant()
+
+        commands.list_datasets(
+            tmp_path,
+            release=release,
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=fetch_croissant,
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+        commands.list_datasets(
+            tmp_path,
+            release=release,
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=fetch_croissant,
+            base_uri=base_uri,
+            now=self.NOW,
+        )
+
+        fetch_croissant.assert_called_once_with(release)
+        cache_file = tmp_path / release / "croissant.json"
+        assert cache_file.exists()
+
+    def test_returns_failure_when_latest_resolution_fails(self, tmp_path):
+        fetch_xml = Mock(side_effect=OSError("network unreachable"))
+
+        result = commands.list_datasets(
+            tmp_path, fetch_xml=fetch_xml, fetch_croissant=self._fetch_croissant(), now=self.NOW
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "s3_error"
+
+    def test_returns_failure_on_croissant_fetch_error(self, tmp_path):
+        fetch_croissant = Mock(side_effect=OSError("network unreachable"))
+
+        result = commands.list_datasets(
+            tmp_path,
+            release="26.06",
+            fetch_xml=self._fetch_xml(),
+            fetch_croissant=fetch_croissant,
+            now=self.NOW,
+        )
+
+        assert result["ok"] is False
+        assert result["error"]["type"] == "croissant_error"

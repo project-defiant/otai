@@ -10,7 +10,8 @@ import json
 
 import typer
 
-from otai import commands, config, formatting
+from otai import commands, config, croissant, formatting
+from otai import releases as releases_mod
 
 app = typer.Typer(
     name="otai",
@@ -59,12 +60,52 @@ def list_releases_cmd(
 ) -> None:
     """List releases available in the Open Targets S3 bucket."""
     cache_dir = config.get_cache_dir()
-    result = commands.list_releases(cache_dir)
+    # Look up the fetch function fresh on every call (rather than relying on
+    # commands.list_releases's bound-at-import-time default) so tests that
+    # patch otai.releases.default_fetch_listing_xml are honored here too.
+    result = commands.list_releases(
+        cache_dir, fetch_xml=releases_mod.default_fetch_listing_xml
+    )
 
     if not result["ok"]:
         _emit_error(result, format)
     elif format == "table":
         typer.echo(formatting.render_table(result["data"]["releases"]))
+    else:
+        typer.echo(json.dumps(result))
+
+
+@app.command("list-datasets")
+def list_datasets_cmd(
+    release: str = typer.Option(
+        None,
+        "--release",
+        help="Release to list datasets for (default: latest).",
+    ),
+    format: str = typer.Option(
+        "json",
+        "--format",
+        callback=_validate_format,
+        help="Output format: json (default) or table.",
+    ),
+) -> None:
+    """List datasets (croissant recordSets) for one release."""
+    cache_dir = config.get_cache_dir()
+    base_uri = config.get_base_uri()
+    # Same reasoning as list_releases_cmd above: look up both fetch
+    # functions fresh on every call so test patches are honored.
+    result = commands.list_datasets(
+        cache_dir,
+        release=release,
+        fetch_xml=releases_mod.default_fetch_listing_xml,
+        fetch_croissant=croissant.default_fetch_croissant,
+        base_uri=base_uri,
+    )
+
+    if not result["ok"]:
+        _emit_error(result, format)
+    elif format == "table":
+        typer.echo(formatting.render_table(result["data"]["datasets"]))
     else:
         typer.echo(json.dumps(result))
 
