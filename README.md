@@ -43,6 +43,12 @@ Every command emits a JSON envelope (`{"ok": true, "data": {...}}` /
 `{"ok": false, "error": {"type": "...", "message": "..."}}`) by default, or
 a human-readable table with `--format table`.
 
+Building a release's schema for the first time can take a while (each
+dataset resolves a glob against real S3) — a progress bar and log messages
+report on that, always on stderr so they never interfere with the JSON on
+stdout. Set `OTAI_LOG_LEVEL` (default `INFO`) to `DEBUG` for more detail or
+`WARNING` to quiet it down.
+
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) — runs the CLI (`uvx`) and manages the

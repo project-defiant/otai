@@ -37,6 +37,7 @@ from typing import Any
 
 import duckdb
 import sqlglot
+from loguru import logger
 from sqlglot import exp
 
 from otai import envelope
@@ -239,25 +240,32 @@ def run_guarded_query(
     It has no opinion on which release(s) `conn`'s search_path points at -
     that setup is `commands.run_sql`'s job.
     """
+    logger.debug(f"Validating query: {sql!r}")
     try:
         validate_read_only(sql)
     except GuardrailViolationError as exc:
+        logger.warning(f"Query rejected by guardrail: {exc}")
         return envelope.failure("guardrail_violation", str(exc))
     except SqlError as exc:
+        logger.warning(f"Query failed to parse: {exc}")
         return envelope.failure("sql_error", str(exc))
 
+    logger.debug(f"Executing query (timeout={timeout_seconds:g}s, row_cap={row_cap})")
     try:
         columns, rows = _execute_with_timeout(
             conn, sql, timeout_seconds, fetch_limit=row_cap + 1
         )
     except QueryTimeoutError as exc:
+        logger.warning(str(exc))
         return envelope.failure("timeout", str(exc))
     except SqlError as exc:
+        logger.warning(f"Query failed during execution: {exc}")
         return envelope.failure("sql_error", str(exc))
 
     truncated = len(rows) > row_cap
     if truncated:
         rows = rows[:row_cap]
+        logger.debug(f"Result truncated to {row_cap} rows")
 
     return envelope.success(
         {

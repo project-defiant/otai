@@ -12,6 +12,7 @@ import typer
 
 from otai import commands, config, croissant, formatting
 from otai import releases as releases_mod
+from otai.logging_setup import configure_logging
 
 app = typer.Typer(
     name="otai",
@@ -26,11 +27,13 @@ VALID_FORMATS = ("json", "table")
 def _root() -> None:
     """Open Targets Agentic Query Tool.
 
-    Empty callback so typer keeps treating subcommands (list-releases,
-    list-datasets, describe-dataset, run-sql) as named subcommands - a
-    Typer app with only a single registered command otherwise collapses
-    to a single top-level command instead of a named subcommand.
+    Also configures logging (stderr only, never stdout - see
+    logging_setup.py) before any subcommand runs. A Typer app with only a
+    single registered command otherwise collapses to a single top-level
+    command instead of keeping subcommands (list-releases, list-datasets,
+    describe-dataset, run-sql) named, which this callback also prevents.
     """
+    configure_logging()
 
 
 def _validate_format(value: str) -> str:
