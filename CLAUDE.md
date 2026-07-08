@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```sh
 make dev              # uv sync --all-groups + install the prek pre-commit hook
 make lint             # ruff check . && ruff format --check . && ty check
-make test             # pytest (137 tests, fully offline, ~2.5s)
+make test             # pytest (163 tests, fully offline, ~2.5s)
 make clean            # remove .venv, caches, build artifacts
 
 uv run pytest tests/test_sql_guard.py            # single test file
@@ -73,21 +73,39 @@ and `run_sql`:
   (defaults to a real `urlopen` call) so tests never hit the network.
 - `schema_builder.py` — DuckDB schema/view construction; takes an
   injectable `base_uri` (defaults to the real S3 bucket) so tests point it
-  at local fixture parquet files via `file://` instead.
+  at local fixture parquet files via `file://` instead. Shows a `tqdm`
+  progress bar while building (a full release build measured ~18s for 55
+  datasets) and logs via `loguru` — both on stderr, never stdout.
 - `sql_guard.py` — the `run-sql` guardrails, deliberately decoupled from
   release resolution so they're tested against a synthetic in-memory
   DuckDB, independent of Open Targets fixtures:
   - Read-only enforcement walks the **entire** `sqlglot` AST (not just the
     top-level statement), so a mutation nested inside a CTE or subquery is
     still rejected as `guardrail_violation`.
+  - Table sources are allowlisted, not blocklisted: a plain table/view
+    reference always parses as `exp.Table(this=exp.Identifier)`; anything
+    else (`read_csv_auto(...)`, `read_parquet(...)`, etc.) is a
+    table-valued function and gets rejected, so `run-sql` can't read
+    arbitrary local/remote data outside the release catalog.
   - The query timeout is a real wall-clock cancellation: the query runs in
     a daemon thread, and past the deadline the main thread calls
     `conn.interrupt()` on the shared connection from outside — DuckDB has
     no built-in `statement_timeout`.
-- `catalog.py` / `config.py` / `envelope.py` / `formatting.py` — small,
-  single-purpose: DuckDB catalog file attach-or-create, cache-dir/base-uri
-  resolution (overridable via `OTAI_CACHE_DIR`/`OTAI_BASE_URI` env vars),
-  the `{"ok": ...}` envelope shape, and `--format table` rendering.
+- `catalog.py` — the shared DuckDB catalog file. `connect_catalog()`
+  (read-write) retries on lock contention rather than failing immediately;
+  `try_connect_readonly()` lets a caller peek at already-built schemas
+  without taking the write lock at all, since read-only connections
+  coexist freely. `commands.py` uses the peek to skip the write connection
+  entirely whenever everything needed is already cached, so concurrent
+  `otai` calls (e.g. parallel Claude Code subagents) against a warm cache
+  don't fight over the lock.
+- `logging_setup.py` — the one place that configures `loguru`'s sink
+  (stderr, level from `OTAI_LOG_LEVEL`); library modules just import
+  `logger` and log directly. Called once from `cli.py`'s root callback.
+- `config.py` / `envelope.py` / `formatting.py` — small, single-purpose:
+  cache-dir/base-uri/log-level resolution (overridable via
+  `OTAI_CACHE_DIR`/`OTAI_BASE_URI`/`OTAI_LOG_LEVEL` env vars), the
+  `{"ok": ...}` envelope shape, and `--format table` rendering.
 
 ### Testing strategy
 

@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
+from loguru import logger
+
 BUCKET = "open-targets-public-data-releases"
 PREFIX = "platform"
 CROISSANT_FILENAME = "croissant.json"
@@ -63,7 +65,11 @@ def _load_cached_croissant(cache_dir: Path, release: str) -> dict[str, Any] | No
         return None
     try:
         return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        logger.warning(
+            f"Cached croissant.json for release {release!r} is corrupt "
+            f"({exc}); refetching"
+        )
         return None
 
 
@@ -101,8 +107,10 @@ def get_croissant(
     """
     cached = _load_cached_croissant(cache_dir, release)
     if cached is not None:
+        logger.debug(f"Using cached croissant.json for release {release!r}")
         return cached
 
+    logger.info(f"Fetching croissant.json for release {release!r}")
     raw = fetch(release)
     try:
         data = json.loads(raw)

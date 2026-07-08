@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 import duckdb
+from loguru import logger
 
 CATALOG_FILENAME = "catalog.duckdb"
 
@@ -62,7 +63,14 @@ def connect_catalog(cache_dir: Path) -> duckdb.DuckDBPyConnection:
         except duckdb.IOException as exc:  # noqa: PERF203 - retry needs try/except per iteration
             last_exc = exc
             if attempt < LOCK_RETRY_ATTEMPTS - 1:
+                logger.warning(
+                    f"Catalog locked by another otai process, retrying "
+                    f"({attempt + 1}/{LOCK_RETRY_ATTEMPTS})..."
+                )
                 time.sleep(LOCK_RETRY_DELAY_SECONDS)
+    logger.error(
+        f"Catalog still locked after {LOCK_RETRY_ATTEMPTS} attempts; giving up"
+    )
     raise last_exc
 
 
