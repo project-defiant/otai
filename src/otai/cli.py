@@ -10,7 +10,7 @@ import json
 
 import typer
 
-from otai import commands, config, croissant, formatting
+from otai import commands, config, croissant, formatting, sql_guard
 from otai import releases as releases_mod
 from otai.logging_setup import configure_logging
 
@@ -41,6 +41,12 @@ def _validate_format(value: str) -> str:
         raise typer.BadParameter(
             f"Unsupported format {value!r}; expected one of {VALID_FORMATS}."
         )
+    return value
+
+
+def _validate_timeout(value: float | None) -> float | None:
+    if value is not None and value <= 0:
+        raise typer.BadParameter("--timeout must be a positive number of seconds.")
     return value
 
 
@@ -146,6 +152,14 @@ def describe_dataset_cmd(
 @app.command("run-sql")
 def run_sql_cmd(
     query: str = typer.Argument(..., help="Read-only SQL query to execute."),
+    timeout: float | None = typer.Option(
+        None,
+        "--timeout",
+        callback=_validate_timeout,
+        help="Override the query timeout, in seconds "
+        f"(default: {sql_guard.DEFAULT_TIMEOUT_SECONDS:g}). Use for a call "
+        "known to need more time than the default allows.",
+    ),
     format: str = typer.Option(
         "json",
         "--format",
@@ -166,6 +180,9 @@ def run_sql_cmd(
         fetch_xml=releases_mod.default_fetch_listing_xml,
         fetch_croissant=croissant.default_fetch_croissant,
         base_uri=base_uri,
+        timeout_seconds=(
+            timeout if timeout is not None else sql_guard.DEFAULT_TIMEOUT_SECONDS
+        ),
     )
     _emit(
         result,
