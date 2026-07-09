@@ -16,7 +16,7 @@ CLI correctly and interpret what it returns.
 ## Invocation
 
 ```
-uvx --from <repo-path> otai <subcommand> [args] [--format table]
+uvx --from git+https://github.com/opentargets/otai.git otai <subcommand> [args] [--format table]
 ```
 
 `<repo-path>` is the absolute path to the local `otai` checkout (this
