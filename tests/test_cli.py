@@ -316,8 +316,12 @@ def test_run_sql_rejects_non_positive_timeout(tmp_path, fixture_release_layout):
         ["run-sql", "SELECT 1", "--timeout", "0"], tmp_path / "cache", base_uri
     )
 
-    assert result.exit_code != 0
-    assert "--timeout must be a positive number" in result.output
+    # Match this file's convention for invalid-option tests (e.g.
+    # test_unknown_format_is_rejected): check the exit code only, not the
+    # styled error text - Typer/Click's box-drawn error panel wraps
+    # differently depending on the terminal width Rich detects, so exact
+    # substring matches against result.output are environment-fragile.
+    assert result.exit_code == 2
 
 
 def test_run_sql_passes_custom_timeout_through_to_commands(
