@@ -35,14 +35,17 @@ The four commands:
 - `list-releases` — what releases exist on S3, which is `latest`, which are cached locally.
 - `list-datasets [--release X]` — the datasets (tables) available in a release.
 - `describe-dataset <name> [--release X]` — a dataset's columns, types, and relationships.
-- `run-sql "<query>"` — read-only SQL against the views, guarded by `sqlglot`-based
-  validation: rejects anything but a single `SELECT`/`WITH` (including mutations
-  nested in a CTE or subquery) and rejects table-valued functions like
-  `read_csv_auto`/`read_parquet` as a data source (only plain, optionally
-  schema-qualified table/view names are allowed — `run-sql` can only query the
-  release catalog, never arbitrary local/remote files), plus a ~1000-row cap
-  and a ~45s timeout. A proactive `EXPLAIN`-based complexity check is scoped
-  but not yet implemented (see [issues/07](issues/07-query-complexity-guard.md)).
+- `run-sql "<query>" [--timeout SECONDS]` — read-only SQL against the views,
+  guarded by `sqlglot`-based validation: rejects anything but a single
+  `SELECT`/`WITH` (including mutations nested in a CTE or subquery) and
+  rejects table-valued functions like `read_csv_auto`/`read_parquet` as a
+  data source (only plain, optionally schema-qualified table/view names are
+  allowed — `run-sql` can only query the release catalog, never arbitrary
+  local/remote files), plus a ~1000-row cap and a timeout (default ~45s,
+  overridable per call with `--timeout` for a query that's legitimately
+  slow rather than a mistake to fix). A proactive `EXPLAIN`-based complexity
+  check is scoped but not yet implemented (see
+  [issues/07](issues/07-query-complexity-guard.md)).
 
 Every command emits a JSON envelope (`{"ok": true, "data": {...}}` /
 `{"ok": false, "error": {"type": "...", "message": "..."}}`) by default, or
@@ -51,8 +54,21 @@ a human-readable table with `--format table`.
 Building a release's schema for the first time can take a while (each
 dataset resolves a glob against real S3) — a progress bar and log messages
 report on that, always on stderr so they never interfere with the JSON on
-stdout. Set `OTAI_LOG_LEVEL` (default `INFO`) to `DEBUG` for more detail or
-`WARNING` to quiet it down.
+stdout.
+
+## Configuration
+
+Everything below is optional — the defaults are correct for regular use.
+
+| Variable         | Default                           | Purpose |
+| ---------------- | ---------------------------------- | ------- |
+| `OTAI_CACHE_DIR` | `~/.cache/otai`                    | Where the shared DuckDB catalog, the "latest release" cache, and cached `croissant.json` files live. |
+| `OTAI_BASE_URI`  | the public Open Targets S3 bucket  | Root the CLI reads parquet/`croissant.json` from. Tests point this at local fixtures; there's no reason to change it otherwise. |
+| `OTAI_LOG_LEVEL` | `INFO`                             | Verbosity of stderr logging (progress bars, cache hits/misses, catalog lock retries). `DEBUG` for more detail, `WARNING` to quiet it down — logging never touches stdout, so it's always safe to change. |
+
+`run-sql` also takes a `--timeout <seconds>` CLI flag (see above) to
+override the default timeout for one call, rather than an env var, since
+it's a per-query decision rather than a standing configuration choice.
 
 ## Requirements
 
@@ -93,6 +109,7 @@ uvx --from . otai list-releases
 uvx --from . otai list-datasets [--release 26.03]
 uvx --from . otai describe-dataset target [--release 26.03]
 uvx --from . otai run-sql "SELECT count(*) FROM target"
+uvx --from . otai run-sql "SELECT count(*) FROM colocalisation" --timeout 90
 ```
 
 Add `--format table` to any command for human-readable output; the default

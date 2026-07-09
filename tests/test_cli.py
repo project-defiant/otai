@@ -4,6 +4,7 @@ from unittest.mock import patch
 from test_croissant import CROISSANT_FIXTURE
 from typer.testing import CliRunner
 
+from otai import catalog, sql_guard
 from otai.cli import app
 
 runner = CliRunner()
@@ -306,3 +307,76 @@ def test_run_sql_malformed_query_returns_sql_error(tmp_path, fixture_release_lay
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
     assert payload["error"]["type"] == "sql_error"
+
+
+def test_run_sql_rejects_non_positive_timeout(tmp_path, fixture_release_layout):
+    base_uri, _release, _dataset_rows = fixture_release_layout
+
+    result = _invoke_with_fixtures(
+        ["run-sql", "SELECT 1", "--timeout", "0"], tmp_path / "cache", base_uri
+    )
+
+    assert result.exit_code != 0
+    assert "--timeout must be a positive number" in result.output
+
+
+def test_run_sql_passes_custom_timeout_through_to_commands(
+    tmp_path, fixture_release_layout
+):
+    base_uri, _release, _dataset_rows = fixture_release_layout
+
+    with patch("otai.cli.commands.run_sql") as mock_run_sql:
+        mock_run_sql.return_value = {"ok": True, "data": {"columns": [], "rows": []}}
+        _invoke_with_fixtures(
+            ["run-sql", "SELECT 1", "--timeout", "120"], tmp_path / "cache", base_uri
+        )
+
+    assert mock_run_sql.call_args.kwargs["timeout_seconds"] == 120.0
+
+
+def test_run_sql_uses_default_timeout_when_flag_omitted(
+    tmp_path, fixture_release_layout
+):
+    base_uri, _release, _dataset_rows = fixture_release_layout
+
+    with patch("otai.cli.commands.run_sql") as mock_run_sql:
+        mock_run_sql.return_value = {"ok": True, "data": {"columns": [], "rows": []}}
+        _invoke_with_fixtures(["run-sql", "SELECT 1"], tmp_path / "cache", base_uri)
+
+    assert (
+        mock_run_sql.call_args.kwargs["timeout_seconds"]
+        == sql_guard.DEFAULT_TIMEOUT_SECONDS
+    )
+
+
+def test_run_sql_timeout_flag_actually_shortens_execution(
+    tmp_path, fixture_release_layout
+):
+    # Real end-to-end confirmation (not mocked): a view wrapping range()
+    # (created outside the guard, same pattern used in test_commands.py/
+    # test_sql_guard.py) is cheap to set up but genuinely slow to query -
+    # a short --timeout must cause it to time out for real.
+    base_uri, release, _dataset_rows = fixture_release_layout
+    cache_dir = tmp_path / "cache"
+
+    _invoke_with_fixtures(["list-datasets"], cache_dir, base_uri)
+    conn = catalog.connect_catalog(cache_dir)
+    try:
+        conn.execute(
+            f'CREATE VIEW "{release}".slow_a AS SELECT * FROM range(100000000)'
+        )
+        conn.execute(f'CREATE VIEW "{release}".slow_b AS SELECT * FROM range(100000)')
+    finally:
+        conn.close()
+
+    result = _invoke_with_fixtures(
+        ["run-sql", "SELECT count(*) FROM slow_a a, slow_b b", "--timeout", "0.2"],
+        cache_dir,
+        base_uri,
+    )
+
+    assert result.exit_code != 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"]["type"] == "timeout"
+    assert "0.2" in payload["error"]["message"]

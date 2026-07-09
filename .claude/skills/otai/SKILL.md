@@ -42,15 +42,31 @@ Positional `<name>` (the dataset to describe) plus `--release` (default
 column names, types, descriptions, and cross-dataset relationships/nested
 subfields, parsed from the release's croissant schema.
 
-### `otai run-sql "<query>"`
+### `otai run-sql "<query>" [--timeout SECONDS]`
 Positional `<query>`, a read-only SQL string. No `--release` flag:
 - Unqualified table names resolve against `latest`.
 - Schema-qualify a table to target a specific (possibly non-latest)
   release, e.g. `"26.03".target`; this also enables cross-release joins in
   a single query, e.g. `"26.06".target JOIN "26.03".target ...`.
 - The CLI enforces read-only SQL, a ~1000-row cap (response says whether
-  results were truncated), and a ~45s timeout — do not attempt to
-  replicate or second-guess these checks yourself.
+  results were truncated), and a timeout — do not attempt to replicate or
+  second-guess these checks yourself.
+- `--timeout SECONDS` overrides the default ~45s timeout for this call
+  only. Use it when a query is legitimately slow but useful (e.g. a full
+  aggregate over a very large dataset) rather than a mistake to fix — see
+  rule 5 below for when to reach for it instead of narrowing the query.
+
+## Environment variables
+
+Configuration is via env vars, not CLI flags (except `--timeout`, which is
+per-call). You normally won't need to set any of these — the defaults are
+correct for regular use — but they're worth knowing about:
+
+| Variable            | Default                          | Purpose |
+|----------------------|-----------------------------------|---------|
+| `OTAI_CACHE_DIR`     | `~/.cache/otai`                   | Where the DuckDB catalog, the "latest release" cache, and cached `croissant.json` files live. |
+| `OTAI_BASE_URI`      | the public Open Targets S3 bucket | Root the CLI reads parquet/`croissant.json` from. Only relevant for testing against local fixtures — never point this anywhere else in normal use. |
+| `OTAI_LOG_LEVEL`     | `INFO`                            | Verbosity of the CLI's stderr logging (progress/cache/retry messages). Set to `DEBUG` if you need more detail while diagnosing an issue; logging never touches stdout, so it's always safe to leave at the default. |
 
 ## JSON envelope
 
@@ -69,7 +85,7 @@ Every command emits one of:
 |------------------------|------------------------------------------------------|------------|
 | `guardrail_violation`  | Query isn't a single read-only SELECT/WITH           | Fix the SQL (e.g. remove the mutating/DDL statement) and retry |
 | `sql_error`            | SQL failed to parse, or failed at execution           | Fix the SQL syntax/logic and retry |
-| `timeout`              | Query ran past the execution time limit               | Narrow the query (add filters/LIMIT, reduce scope) and retry |
+| `timeout`              | Query ran past the execution time limit               | If the query is doing more work than the question needs, narrow it (add filters/LIMIT, reduce scope) and retry. If it's already minimal and legitimately slow (e.g. a full aggregate over a huge dataset), retry the *same* query with `--timeout <seconds>` instead |
 | `release_not_found`    | A schema-qualified release in the query is unknown    | Run `list-releases` to see valid release identifiers, then retry with a correct qualifier |
 | `dataset_not_found`    | `describe-dataset` name doesn't exist in that release | Run `list-datasets` for that release to find the correct name |
 | `s3_error`             | Couldn't list/reach the S3 bucket                     | Report the failure to the user; retrying immediately is unlikely to help |
@@ -91,9 +107,10 @@ Every command emits one of:
    specific past release or spans more than one release; leave table names
    unqualified when the question is about the latest release.
 5. **On a `run-sql` error, branch on `error.type`** per the table above —
-   in short: `timeout` → narrow and retry; `sql_error` /
-   `guardrail_violation` → fix the SQL; `release_not_found` → check
-   `list-releases` before retrying.
+   in short: `timeout` → narrow and retry, or retry with `--timeout
+   <seconds>` if the query is already minimal and legitimately slow;
+   `sql_error` / `guardrail_violation` → fix the SQL; `release_not_found`
+   → check `list-releases` before retrying.
 6. **Cite your sources in the final answer**: state which release(s) were
    queried and show the actual SQL you executed, so the user can verify or
    rerun it.
