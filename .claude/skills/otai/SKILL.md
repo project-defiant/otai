@@ -43,11 +43,17 @@ column names, types, descriptions, and cross-dataset relationships/nested
 subfields, parsed from the release's croissant schema.
 
 ### `otai run-sql "<query>" [--timeout SECONDS]`
-Positional `<query>`, a read-only SQL string. No `--release` flag:
-- Unqualified table names resolve against `latest`.
-- Schema-qualify a table to target a specific (possibly non-latest)
-  release, e.g. `"26.03".target`; this also enables cross-release joins in
-  a single query, e.g. `"26.06".target JOIN "26.03".target ...`.
+Positional `<query>`, a read-only SQL string.
+
+**No `--release` flag, unlike the subcommands above — don't pass one.**
+Each release is a DuckDB schema named after its identifier, and `otai`
+reads which release(s) it needs straight off your query's schema
+qualifiers: `select * from "26.06".target` → release `26.06`, fetched/built
+automatically if needed. Unqualified names (e.g. `target`) resolve to
+`latest`. A single call can span any number of releases this way, e.g.
+`... "26.06".target join "26.03".target on ...` — no separate flag or step
+for comparing releases.
+
 - The CLI enforces read-only SQL, a ~1000-row cap (response says whether
   results were truncated), and a timeout — do not attempt to replicate or
   second-guess these checks yourself.
